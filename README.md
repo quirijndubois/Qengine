@@ -2,6 +2,6 @@
 
 Shitty chess engine in development. Written in rust. 
 
-::```sh
+```sh
 cargo run
 ```
