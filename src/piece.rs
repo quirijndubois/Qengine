@@ -320,27 +320,21 @@ fn get_knight_moves(pos: (usize, usize), board: &[[Option<Piece>; 8]; 8]) -> Vec
         let new_col = col as isize + dc;
         let new_row = row as isize + dr;
 
-        // 1. BOUNDS CHECK: Verify the jump stays on the board
         if new_col >= 0 && new_col < 8 && new_row >= 0 && new_row < 8 {
             let nc = new_col as usize;
             let nr = new_row as usize;
 
-            // 2. OCCUPANCY CHECK: Safe to index now
             match &board[nr][nc] {
                 None => {
                     moves.push((nc, nr));
                 }
                 Some(p) => {
-                    // If it's an enemy, we can take it
                     if p.get_side() != piece_side {
                         moves.push((nc, nr));
                     }
-                    // Note: No 'break' here!
-                    // A knight's jumps are independent of each other.
                 }
             }
         }
     }
     moves
 }
-
