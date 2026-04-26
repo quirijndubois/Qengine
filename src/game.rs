@@ -18,6 +18,7 @@ pub struct GameState {
     pub occupied: u64,
     pub white_pieces: u64,
     pub black_pieces: u64,
+    pub legal_mask: u64,
 
     pub white_castle_kingside: bool,
     pub white_castle_queenside: bool,
@@ -48,6 +49,7 @@ impl GameState {
             occupied: 0xFFFF00000000FFFF,
             white_pieces: 0x000000000000FFFF,
             black_pieces: 0xFFFF000000000000,
+            legal_mask: 0u64,
 
             white_castle_kingside: true,
             white_castle_queenside: true,
@@ -220,6 +222,8 @@ impl GameState {
     }
 
     pub fn get_moves(&self) -> [u64; 64] {
+        //moves is an array with length 64 (each cell) where each element is a bitboard of legal
+        //moves for the piece on that cell (or 0 if no piece)
         let mut moves = [0u64; 64];
         for i in 0..64 {
             moves[i] = self.get_piece_moves(1u64 << i);
