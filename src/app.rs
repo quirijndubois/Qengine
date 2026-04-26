@@ -76,7 +76,7 @@ impl eframe::App for ChessApp {
                 let sel_col = sel_index as usize % 8;
                 let sel_row = sel_index as usize / 8;
                 let pos = 1u64 << (sel_row * 8 + sel_col);
-                self.game_state.get_moves(pos)
+                self.game_state.get_piece_moves(pos)
             } else {
                 0
             };

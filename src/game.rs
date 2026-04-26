@@ -114,11 +114,11 @@ impl GameState {
 
         new_state.en_passant_target = 0;
 
-        // some en passant logic
         if self.white_pawns & from != 0 {
             remove(&mut new_state.white_pawns);
             place(&mut new_state.white_pawns);
 
+            // en passant logic
             if to == from << 16 {
                 new_state.en_passant_target = from << 8;
             }
@@ -219,7 +219,16 @@ impl GameState {
         new_state
     }
 
-    pub fn get_moves(&self, pos: u64) -> u64 {
+    pub fn get_moves(&self) -> [u64; 64] {
+        let mut moves = [0u64; 64];
+        for i in 0..64 {
+            moves[i] = self.get_piece_moves(1u64 << i);
+        }
+
+        moves
+    }
+
+    pub fn get_piece_moves(&self, pos: u64) -> u64 {
         let own_pieces = if self.white_to_move {
             self.white_pieces
         } else {
