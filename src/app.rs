@@ -155,7 +155,7 @@ impl eframe::App for ChessApp {
                             let from_mask = 1u64 << sel_index;
                             let to_mask = 1u64 << index;
 
-                            if self.game_state.get_moves(from_mask) & to_mask == 0 {
+                            if self.game_state.get_piece_moves(from_mask) & to_mask == 0 {
                                 self.selected_cell = None;
                                 return;
                             }
