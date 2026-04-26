@@ -14,6 +14,10 @@ pub struct GameState {
     pub black_king: u64,
 
     pub white_to_move: bool,
+
+    pub occupied: u64,
+    pub white_pieces: u64,
+    pub black_pieces: u64,
 }
 
 impl GameState {
@@ -33,20 +37,51 @@ impl GameState {
             black_king: 0x1000000000000000,
 
             white_to_move: true,
+
+            occupied: 0xFFFF00000000FFFF,
+            white_pieces: 0x000000000000FFFF,
+            black_pieces: 0xFFFF000000000000,
         }
     }
 }
 
 impl GameState {
+    pub fn update_derived(&mut self) {
+        self.white_pieces = self.white_pawns
+            | self.white_knights
+            | self.white_bishops
+            | self.white_rooks
+            | self.white_queens
+            | self.white_king;
+        self.black_pieces = self.black_pawns
+            | self.black_knights
+            | self.black_bishops
+            | self.black_rooks
+            | self.black_queens
+            | self.black_king;
+
+        self.occupied = self.white_pieces | self.black_pieces;
+    }
+
     pub fn make_move(&self, from: u64, to: u64) -> GameState {
         let mut new_state = self.clone();
 
+        let own_pieces = if self.white_to_move {
+            self.white_pieces
+        } else {
+            self.black_pieces
+        };
+
+        if from & own_pieces == 0 {
+            return new_state;
+        }
+
         // helper closure to remove a piece from a bitboard
-        let mut remove = |bb: &mut u64| {
+        let remove = |bb: &mut u64| {
             *bb &= !from;
         };
 
-        let mut place = |bb: &mut u64| {
+        let place = |bb: &mut u64| {
             *bb |= to;
         };
 
@@ -108,61 +143,45 @@ impl GameState {
         }
 
         new_state.white_to_move = !self.white_to_move;
+        new_state.update_derived();
 
         new_state
     }
     pub fn get_moves(&self, pos: u64) -> u64 {
-        let occupied = self.white_pawns
-            | self.white_knights
-            | self.white_bishops
-            | self.white_rooks
-            | self.white_queens
-            | self.white_king
-            | self.black_pawns
-            | self.black_knights
-            | self.black_bishops
-            | self.black_rooks
-            | self.black_queens
-            | self.black_king;
+        let own_pieces = if self.white_to_move {
+            self.white_pieces
+        } else {
+            self.black_pieces
+        };
 
-        let white_pieces = self.white_pawns
-            | self.white_knights
-            | self.white_bishops
-            | self.white_rooks
-            | self.white_queens
-            | self.white_king;
-
-        let black_pieces = self.black_pawns
-            | self.black_knights
-            | self.black_bishops
-            | self.black_rooks
-            | self.black_queens
-            | self.black_king;
+        if pos & own_pieces == 0 {
+            return 0;
+        }
 
         if (pos & self.black_pawns) != 0 {
-            Self::get_pawn_moves(pos, occupied, black_pieces, false)
+            Self::get_pawn_moves(pos, self.occupied, self.black_pieces, false)
         } else if (pos & self.white_knights) != 0 {
-            Self::get_knight_moves(pos, white_pieces)
+            Self::get_knight_moves(pos, self.white_pieces)
         } else if (pos & self.white_bishops) != 0 {
-            Self::get_bishop_moves(pos, occupied, white_pieces)
+            Self::get_bishop_moves(pos, self.occupied, self.white_pieces)
         } else if (pos & self.white_rooks) != 0 {
-            Self::get_rook_moves(pos, occupied, white_pieces)
+            Self::get_rook_moves(pos, self.occupied, self.white_pieces)
         } else if (pos & self.white_queens) != 0 {
-            Self::get_queen_moves(pos, occupied, white_pieces)
+            Self::get_queen_moves(pos, self.occupied, self.white_pieces)
         } else if (pos & self.white_king) != 0 {
-            Self::get_king_moves(pos, white_pieces)
+            Self::get_king_moves(pos, self.white_pieces)
         } else if (pos & self.white_pawns) != 0 {
-            Self::get_pawn_moves(pos, occupied, white_pieces, true)
+            Self::get_pawn_moves(pos, self.occupied, self.white_pieces, true)
         } else if (pos & self.black_knights) != 0 {
-            Self::get_knight_moves(pos, black_pieces)
+            Self::get_knight_moves(pos, self.black_pieces)
         } else if (pos & self.black_bishops) != 0 {
-            Self::get_bishop_moves(pos, occupied, black_pieces)
+            Self::get_bishop_moves(pos, self.occupied, self.black_pieces)
         } else if (pos & self.black_rooks) != 0 {
-            Self::get_rook_moves(pos, occupied, black_pieces)
+            Self::get_rook_moves(pos, self.occupied, self.black_pieces)
         } else if (pos & self.black_queens) != 0 {
-            Self::get_queen_moves(pos, occupied, black_pieces)
+            Self::get_queen_moves(pos, self.occupied, self.black_pieces)
         } else if (pos & self.black_king) != 0 {
-            Self::get_king_moves(pos, black_pieces)
+            Self::get_king_moves(pos, self.black_pieces)
         } else {
             0
         }
@@ -205,7 +224,6 @@ impl GameState {
 
     pub fn get_rook_moves(pos: u64, occupied: u64, own_pieces: u64) -> u64 {
         let mut moves = 0u64;
-        let file_mask = 0x0101010101010101u64; // A file - isolates the rook's file for vertical rays
 
         // North ray
         let mut ray = pos;

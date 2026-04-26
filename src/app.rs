@@ -2,23 +2,44 @@ use crate::game::GameState;
 use crate::piece::Piece;
 use eframe::egui;
 
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use std::io::Cursor;
+
+// Embed sound files at compile time
+const MOVE_SOUND: &[u8] = include_bytes!("../sounds/Move.ogg");
+const CAPTURE_SOUND: &[u8] = include_bytes!("../sounds/Capture.ogg");
+
 pub const SQUARE_SIZE: f32 = 80.0;
 pub const BOARD_ORIGIN: egui::Pos2 = egui::pos2(20.0, 20.0);
 
 pub struct ChessApp {
     pub selected_cell: Option<i32>,
     pub game_state: GameState,
+
+    _stream: OutputStream,
+    stream_handle: OutputStreamHandle,
 }
 
 impl ChessApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
-
-        let game = GameState::new();
+        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
 
         Self {
-            game_state: game,
+            game_state: GameState::new(),
             selected_cell: None,
+            _stream,
+            stream_handle,
+        }
+    }
+
+    fn play_sound(&self, bytes: &'static [u8]) {
+        if let Ok(sink) = Sink::try_new(&self.stream_handle) {
+            let cursor = Cursor::new(bytes);
+            if let Ok(source) = Decoder::new(cursor) {
+                sink.append(source);
+                sink.detach(); // plays without blocking
+            }
         }
     }
 
@@ -134,13 +155,20 @@ impl eframe::App for ChessApp {
                             let from_mask = 1u64 << sel_index;
                             let to_mask = 1u64 << index;
 
-                            //check if the move is legal
                             if self.game_state.get_moves(from_mask) & to_mask == 0 {
                                 self.selected_cell = None;
                                 return;
                             }
 
+                            let is_take = self.game_state.occupied & to_mask != 0;
+
                             self.game_state = self.game_state.make_move(from_mask, to_mask);
+
+                            if is_take {
+                                self.play_sound(CAPTURE_SOUND);
+                            } else {
+                                self.play_sound(MOVE_SOUND);
+                            }
 
                             self.selected_cell = None;
                             return;
