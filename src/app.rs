@@ -72,7 +72,7 @@ impl eframe::App for ChessApp {
             let painter = ui.painter();
 
             //convert selected cell to mask
-            let legal_moves = self.game_state.get_moves();
+            let legal_moves = self.game_state.legal_moves;
 
             // Draw Squares
             for row in 0..8 {
@@ -91,6 +91,11 @@ impl eframe::App for ChessApp {
                         if legal_moves[sel_index as usize] & move_mask != 0 {
                             Self::draw_square(painter, col, row, 0, 255, 0, 100);
                         }
+                    }
+
+                    let p = self.game_state.king_pin_lines;
+                    if (p[0] | p[1] | p[2] | p[3] | p[4] | p[5] | p[6] | p[7]) & move_mask != 0 {
+                        Self::draw_square(painter, col, row, 0, 0, 255, 100);
                     }
 
                     if let Some(sel_index) = self.selected_cell {
