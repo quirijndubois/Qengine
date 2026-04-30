@@ -22,11 +22,11 @@ pub struct GameState {
     pub black_pieces: u64,
     pub king_pin_lines: [u64; 8],
 
-    pub legal_moves: [u64; 64],
-    pub legal_mask: u64,
+    pub white_legal_moves: [u64; 64],
+    pub white_legal_mask: u64,
 
-    pub opponent_legal_moves: [u64; 64],
-    pub opponent_legal_mask: u64,
+    pub black_legal_moves: [u64; 64],
+    pub black_legal_mask: u64,
 
     pub white_castle_kingside: bool,
     pub white_castle_queenside: bool,
@@ -35,7 +35,8 @@ pub struct GameState {
 
     pub en_passant_target: u64,
 
-    pub is_check: bool,
+    pub white_is_checked: bool,
+    pub black_is_checked: bool,
 }
 
 impl GameState {
@@ -61,11 +62,11 @@ impl GameState {
             black_pieces: 064,
             king_pin_lines: [0u64; 8],
 
-            legal_moves: [0u64; 64],
-            legal_mask: 0u64,
+            white_legal_moves: [0u64; 64],
+            white_legal_mask: 0u64,
 
-            opponent_legal_moves: [0u64; 64],
-            opponent_legal_mask: 0u64,
+            black_legal_moves: [0u64; 64],
+            black_legal_mask: 0u64,
 
             white_castle_kingside: true,
             white_castle_queenside: true,
@@ -74,7 +75,8 @@ impl GameState {
 
             en_passant_target: 0,
 
-            is_check: false,
+            white_is_checked: false,
+            black_is_checked: false,
         };
 
         game_state.update_derived();
@@ -248,36 +250,39 @@ impl GameState {
         new_state.update_derived();
         new_state.update_legal_moves();
 
+        new_state.white_is_checked = (new_state.black_legal_mask & new_state.white_king) != 0;
+        new_state.black_is_checked = (new_state.white_legal_mask & new_state.black_king) != 0;
+
         new_state
     }
 
     pub fn update_legal_moves(&mut self) {
         //moves is an array with length 64 (each cell) where each element is a bitboard of legal
         //moves for the piece on that cell (or 0 if no piece)
-        let own_pieces = if self.white_to_move {
-            self.white_pieces
+
+        if self.white_to_move {
+            self.update_black_legal_moves();
+            self.update_white_legal_moves();
         } else {
-            self.black_pieces
-        };
-
-        let opponent_pieces = if self.white_to_move {
-            self.black_pieces
-        } else {
-            self.white_pieces
-        };
-
-        self.legal_mask = 0u64;
-        self.opponent_legal_mask = 0u64;
-
-        self.legal_moves = [0u64; 64];
-        for i in 0..64 {
-            self.opponent_legal_moves[i] = self.get_piece_moves(1u64 << i, opponent_pieces);
-            self.opponent_legal_mask |= self.opponent_legal_moves[i];
+            self.update_white_legal_moves();
+            self.update_black_legal_moves();
         }
+    }
 
+    pub fn update_white_legal_moves(&mut self) {
+        self.white_legal_mask = 0u64;
+        self.white_legal_moves = [0u64; 64];
         for i in 0..64 {
-            self.legal_moves[i] = self.get_piece_moves(1u64 << i, own_pieces);
-            self.legal_mask |= self.legal_moves[i];
+            self.white_legal_moves[i] = self.get_piece_moves(1u64 << i, self.white_pieces);
+            self.white_legal_mask |= self.white_legal_moves[i];
+        }
+    }
+    pub fn update_black_legal_moves(&mut self) {
+        self.black_legal_mask = 0u64;
+        self.black_legal_moves = [0u64; 64];
+        for i in 0..64 {
+            self.black_legal_moves[i] = self.get_piece_moves(1u64 << i, self.black_pieces);
+            self.black_legal_mask |= self.black_legal_moves[i];
         }
     }
 
@@ -392,6 +397,12 @@ impl GameState {
             let mut line = 0u64;
             let mut passed_own_piece = false;
 
+            let opponent_legal_mask = if self.white_to_move {
+                self.black_legal_mask
+            } else {
+                self.white_legal_mask
+            };
+
             loop {
                 ray = if shift > 0 {
                     ray << shift
@@ -406,7 +417,7 @@ impl GameState {
                 line |= ray;
 
                 if ray & self.occupied != 0 {
-                    if ray & self.opponent_legal_mask != 0 {
+                    if ray & opponent_legal_mask != 0 {
                         // Only commit the pin line if the terminating piece
                         // is a slider that can actually attack on this axis.
                         if passed_own_piece && (ray & terminators != 0) {
@@ -456,7 +467,13 @@ impl GameState {
         moves |= (pos >> 7) & not_a_file; // south-east
         moves |= (pos >> 9) & not_h_file; // south-west
 
-        (moves & !own_pieces) & !self.opponent_legal_mask
+        let opponent_legal_mask = if self.white_to_move {
+            self.black_legal_mask
+        } else {
+            self.white_legal_mask
+        };
+
+        (moves & !own_pieces) & !opponent_legal_mask
     }
 
     pub fn get_rook_moves(pos: u64, occupied: u64, own_pieces: u64) -> u64 {

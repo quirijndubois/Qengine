@@ -8,6 +8,7 @@ use std::io::Cursor;
 // Embed sound files at compile time
 const MOVE_SOUND: &[u8] = include_bytes!("../sounds/Move.ogg");
 const CAPTURE_SOUND: &[u8] = include_bytes!("../sounds/Capture.ogg");
+const ERROR_SOUND: &[u8] = include_bytes!("../sounds/Error.ogg");
 
 pub const SQUARE_SIZE: f32 = 80.0;
 pub const BOARD_ORIGIN: egui::Pos2 = egui::pos2(20.0, 20.0);
@@ -72,7 +73,11 @@ impl eframe::App for ChessApp {
             let painter = ui.painter();
 
             //convert selected cell to mask
-            let legal_moves = self.game_state.legal_moves;
+            let legal_moves = if self.game_state.white_to_move {
+                self.game_state.white_legal_moves
+            } else {
+                self.game_state.black_legal_moves
+            };
 
             // Draw Squares
             for row in 0..8 {
@@ -91,6 +96,18 @@ impl eframe::App for ChessApp {
                         if legal_moves[sel_index as usize] & move_mask != 0 {
                             Self::draw_square(painter, col, row, 0, 255, 0, 100);
                         }
+                    }
+
+                    if (self.game_state.white_legal_mask & self.game_state.black_king) & move_mask
+                        != 0
+                    {
+                        Self::draw_square(painter, col, row, 255, 0, 0, 100);
+                    }
+
+                    if (self.game_state.black_legal_mask & self.game_state.white_king) & move_mask
+                        != 0
+                    {
+                        Self::draw_square(painter, col, row, 255, 0, 0, 100);
                     }
 
                     let p = self.game_state.king_pin_lines;
@@ -165,7 +182,10 @@ impl eframe::App for ChessApp {
 
                             self.game_state = self.game_state.make_move(from_mask, to_mask);
 
-                            if is_take {
+                            if self.game_state.white_is_checked || self.game_state.black_is_checked
+                            {
+                                self.play_sound(ERROR_SOUND);
+                            } else if is_take {
                                 self.play_sound(CAPTURE_SOUND);
                             } else {
                                 self.play_sound(MOVE_SOUND);
