@@ -1,5 +1,55 @@
 use crate::game;
 
+const NOT_A_FILE: u64 = 0xFEFEFEFEFEFEFEFE;
+const NOT_H_FILE: u64 = 0x7F7F7F7F7F7F7F7F;
+const NOT_AB_FILE: u64 = 0xFCFCFCFCFCFCFCFC;
+const NOT_GH_FILE: u64 = 0x3F3F3F3F3F3F3F3F;
+const RANK_4: u64 = 0x00000000FF000000;
+const RANK_5: u64 = 0x000000FF00000000;
+
+const KING_ATTACKS: [u64; 64] = compute_king_attacks();
+const KNIGHT_ATTACKS: [u64; 64] = compute_knight_attacks();
+
+const fn compute_king_attacks() -> [u64; 64] {
+    let mut table = [0; 64];
+    let mut i = 0;
+    while i < 64 {
+        let pos = 1u64 << i;
+        let mut moves = 0u64;
+        moves |= pos << 8;
+        moves |= pos >> 8;
+        moves |= (pos << 1) & NOT_A_FILE;
+        moves |= (pos >> 1) & NOT_H_FILE;
+        moves |= (pos << 9) & NOT_A_FILE;
+        moves |= (pos << 7) & NOT_H_FILE;
+        moves |= (pos >> 7) & NOT_A_FILE;
+        moves |= (pos >> 9) & NOT_H_FILE;
+        table[i] = moves;
+        i += 1;
+    }
+    table
+}
+
+const fn compute_knight_attacks() -> [u64; 64] {
+    let mut table = [0; 64];
+    let mut i = 0;
+    while i < 64 {
+        let pos = 1u64 << i;
+        let mut moves = 0u64;
+        moves |= (pos << 17) & NOT_A_FILE;
+        moves |= (pos << 15) & NOT_H_FILE;
+        moves |= (pos << 10) & NOT_AB_FILE;
+        moves |= (pos << 6) & NOT_GH_FILE;
+        moves |= (pos >> 17) & NOT_H_FILE;
+        moves |= (pos >> 15) & NOT_A_FILE;
+        moves |= (pos >> 10) & NOT_GH_FILE;
+        moves |= (pos >> 6) & NOT_AB_FILE;
+        table[i] = moves;
+        i += 1;
+    }
+    table
+}
+
 #[derive(Clone)]
 pub struct GameState {
     pub white_pawns: u64,
@@ -43,6 +93,12 @@ pub struct GameState {
     pub black_is_checked: bool,
 }
 
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GameState {
     pub fn new() -> Self {
         let mut game_state = GameState {
@@ -61,20 +117,20 @@ impl GameState {
 
             white_to_move: true,
 
-            occupied: 0u64,
-            white_pieces: 0u64,
-            black_pieces: 0u64,
-            king_pin_lines: [0u64; 8],
+            occupied: 0,
+            white_pieces: 0,
+            black_pieces: 0,
+            king_pin_lines: [0; 8],
 
-            white_legal_moves: [0u64; 64],
-            white_legal_mask: 0u64,
-            white_attack_mask: 0u64,
+            white_legal_moves: [0; 64],
+            white_legal_mask: 0,
+            white_attack_mask: 0,
 
-            black_legal_moves: [0u64; 64],
-            black_legal_mask: 0u64,
-            black_attack_mask: 0u64,
+            black_legal_moves: [0; 64],
+            black_legal_mask: 0,
+            black_attack_mask: 0,
 
-            check_mask: 0xFFFFFFFFFFFFFFFFu64,
+            check_mask: !0u64,
 
             white_castle_kingside: true,
             white_castle_queenside: true,
@@ -92,9 +148,7 @@ impl GameState {
 
         game_state
     }
-}
 
-impl GameState {
     pub fn update_derived(&mut self) {
         self.white_pieces = self.white_pawns
             | self.white_knights
@@ -130,109 +184,87 @@ impl GameState {
             return new_state;
         }
 
-        let remove = |bb: &mut u64| {
-            *bb &= !from;
-        };
-
-        let place = |bb: &mut u64| {
-            *bb |= to;
-        };
-
-        new_state.white_pawns &= !to;
-        new_state.white_knights &= !to;
-        new_state.white_bishops &= !to;
-        new_state.white_rooks &= !to;
-        new_state.white_queens &= !to;
-        new_state.white_king &= !to;
-
-        new_state.black_pawns &= !to;
-        new_state.black_knights &= !to;
-        new_state.black_bishops &= !to;
-        new_state.black_rooks &= !to;
-        new_state.black_queens &= !to;
-        new_state.black_king &= !to;
+        // Unconditionally clear 'to' square across ALL piece bitboards to handle captures safely.
+        let clear_to = !to;
+        new_state.white_pawns &= clear_to;
+        new_state.white_knights &= clear_to;
+        new_state.white_bishops &= clear_to;
+        new_state.white_rooks &= clear_to;
+        new_state.white_queens &= clear_to;
+        new_state.white_king &= clear_to;
+        new_state.black_pawns &= clear_to;
+        new_state.black_knights &= clear_to;
+        new_state.black_bishops &= clear_to;
+        new_state.black_rooks &= clear_to;
+        new_state.black_queens &= clear_to;
+        new_state.black_king &= clear_to;
 
         new_state.en_passant_target = 0;
+        let move_mask = from | to; // Used for ultra-fast XOR placement
 
-        if self.white_pawns & from != 0 {
-            remove(&mut new_state.white_pawns);
-            place(&mut new_state.white_pawns);
+        if self.white_to_move {
+            if self.white_pawns & from != 0 {
+                new_state.white_pawns ^= move_mask;
 
-            if to == from << 16 {
-                new_state.en_passant_target = from << 8;
-            }
+                if to == from << 16 {
+                    new_state.en_passant_target = from << 8;
+                }
+                if self.en_passant_target != 0 && to == self.en_passant_target {
+                    new_state.black_pawns &= !(self.en_passant_target >> 8);
+                }
+            } else if self.white_knights & from != 0 {
+                new_state.white_knights ^= move_mask;
+            } else if self.white_bishops & from != 0 {
+                new_state.white_bishops ^= move_mask;
+            } else if self.white_rooks & from != 0 {
+                new_state.white_rooks ^= move_mask;
+            } else if self.white_queens & from != 0 {
+                new_state.white_queens ^= move_mask;
+            } else if self.white_king & from != 0 {
+                new_state.white_king ^= move_mask;
 
-            if self.en_passant_target != 0 && to == self.en_passant_target {
-                new_state.black_pawns &= !(self.en_passant_target >> 8);
-            }
-        } else if self.white_knights & from != 0 {
-            remove(&mut new_state.white_knights);
-            place(&mut new_state.white_knights);
-        } else if self.white_bishops & from != 0 {
-            remove(&mut new_state.white_bishops);
-            place(&mut new_state.white_bishops);
-        } else if self.white_rooks & from != 0 {
-            remove(&mut new_state.white_rooks);
-            place(&mut new_state.white_rooks);
-        } else if self.white_queens & from != 0 {
-            remove(&mut new_state.white_queens);
-            place(&mut new_state.white_queens);
-        } else if self.white_king & from != 0 {
-            remove(&mut new_state.white_king);
-            place(&mut new_state.white_king);
+                new_state.white_castle_kingside = false;
+                new_state.white_castle_queenside = false;
 
-            new_state.white_castle_kingside = false;
-            new_state.white_castle_queenside = false;
-
-            if to == from << 2 {
-                new_state.white_rooks &= !0x0000000000000080u64; // remove h1
-                new_state.white_rooks |= 0x0000000000000020u64; // place f1
-            }
-            if to == from >> 2 {
-                new_state.white_rooks &= !0x0000000000000001u64; // remove a1
-                new_state.white_rooks |= 0x0000000000000008u64; // place d1
-            }
-        } else if self.black_pawns & from != 0 {
-            remove(&mut new_state.black_pawns);
-            place(&mut new_state.black_pawns);
-
-            if to == from >> 16 {
-                new_state.en_passant_target = from >> 8;
-            }
-            if self.en_passant_target != 0 && to == self.en_passant_target {
-                new_state.white_pawns &= !(self.en_passant_target << 8);
-            }
-        } else if self.black_knights & from != 0 {
-            remove(&mut new_state.black_knights);
-            place(&mut new_state.black_knights);
-        } else if self.black_bishops & from != 0 {
-            remove(&mut new_state.black_bishops);
-            place(&mut new_state.black_bishops);
-        } else if self.black_rooks & from != 0 {
-            remove(&mut new_state.black_rooks);
-            place(&mut new_state.black_rooks);
-        } else if self.black_queens & from != 0 {
-            remove(&mut new_state.black_queens);
-            place(&mut new_state.black_queens);
-        } else if self.black_king & from != 0 {
-            remove(&mut new_state.black_king);
-            place(&mut new_state.black_king);
-
-            new_state.black_castle_kingside = false;
-            new_state.black_castle_queenside = false;
-
-            if to == from << 2 {
-                new_state.black_rooks &= !0x8000000000000000u64; // remove h8
-                new_state.black_rooks |= 0x2000000000000000u64; // place f8
-            }
-            if to == from >> 2 {
-                new_state.black_rooks &= !0x0100000000000000u64; // remove a8
-                new_state.black_rooks |= 0x0800000000000000u64; // place d8
+                if to == from << 2 {
+                    new_state.white_rooks ^= 0x00000000000000A0; // h1 -> f1
+                } else if to == from >> 2 {
+                    new_state.white_rooks ^= 0x0000000000000009; // a1 -> d1
+                }
             }
         } else {
-            return self.clone();
+            if self.black_pawns & from != 0 {
+                new_state.black_pawns ^= move_mask;
+
+                if to == from >> 16 {
+                    new_state.en_passant_target = from >> 8;
+                }
+                if self.en_passant_target != 0 && to == self.en_passant_target {
+                    new_state.white_pawns &= !(self.en_passant_target << 8);
+                }
+            } else if self.black_knights & from != 0 {
+                new_state.black_knights ^= move_mask;
+            } else if self.black_bishops & from != 0 {
+                new_state.black_bishops ^= move_mask;
+            } else if self.black_rooks & from != 0 {
+                new_state.black_rooks ^= move_mask;
+            } else if self.black_queens & from != 0 {
+                new_state.black_queens ^= move_mask;
+            } else if self.black_king & from != 0 {
+                new_state.black_king ^= move_mask;
+
+                new_state.black_castle_kingside = false;
+                new_state.black_castle_queenside = false;
+
+                if to == from << 2 {
+                    new_state.black_rooks ^= 0xA000000000000000; // h8 -> f8
+                } else if to == from >> 2 {
+                    new_state.black_rooks ^= 0x0900000000000000; // a8 -> d8
+                }
+            }
         }
 
+        // Castling rights revocation (Rook moved or captured)
         if from == 0x0000000000000080 || to == 0x0000000000000080 {
             new_state.white_castle_kingside = false;
         }
@@ -259,11 +291,11 @@ impl GameState {
 
     pub fn update_legal_moves(&mut self) {
         if self.white_to_move {
-            self.update_black_legal_moves();
+            self.update_black_legal_moves(); // Generates black attack masks
             self.compute_check_mask();
             self.update_white_legal_moves();
         } else {
-            self.update_white_legal_moves();
+            self.update_white_legal_moves(); // Generates white attack masks
             self.compute_check_mask();
             self.update_black_legal_moves();
         }
@@ -301,30 +333,26 @@ impl GameState {
         };
 
         if opponent_attack_mask & our_king == 0 {
-            self.check_mask = 0xFFFFFFFFFFFFFFFFu64;
+            self.check_mask = !0u64; // No check
             return;
         }
 
         let mut mask = 0u64;
         let mut checker_count = 0u32;
 
-        let knight_checkers = Self::get_knight_moves(our_king, 0) & opp_knights;
+        let king_idx = our_king.trailing_zeros() as usize;
+        let knight_checkers = KNIGHT_ATTACKS[king_idx] & opp_knights;
         if knight_checkers != 0 {
             mask |= knight_checkers;
             checker_count += knight_checkers.count_ones();
         }
 
         let (pawn_atk_l, pawn_atk_r) = if self.white_to_move {
-            (
-                (our_king << 9) & 0xFEFEFEFEFEFEFEFEu64,
-                (our_king << 7) & 0x7F7F7F7F7F7F7F7Fu64,
-            )
+            ((our_king << 9) & NOT_A_FILE, (our_king << 7) & NOT_H_FILE)
         } else {
-            (
-                (our_king >> 7) & 0xFEFEFEFEFEFEFEFEu64,
-                (our_king >> 9) & 0x7F7F7F7F7F7F7F7Fu64,
-            )
+            ((our_king >> 7) & NOT_A_FILE, (our_king >> 9) & NOT_H_FILE)
         };
+
         let pawn_checkers = (pawn_atk_l | pawn_atk_r) & opp_pawns;
         if pawn_checkers != 0 {
             mask |= pawn_checkers;
@@ -337,73 +365,80 @@ impl GameState {
         }
 
         let king_rook_rays = Self::get_rook_moves(our_king, self.occupied, 0);
-        let king_bishop_rays = Self::get_bishop_moves(our_king, self.occupied, 0);
-
         let mut temp = king_rook_rays & (opp_rooks | opp_queens);
         while temp != 0 {
-            let checker = temp & temp.wrapping_neg(); // isolate LSB
+            let checker = temp & temp.wrapping_neg();
             let checker_rays = Self::get_rook_moves(checker, self.occupied, 0);
             mask |= (king_rook_rays & checker_rays) | checker;
             checker_count += 1;
-            temp &= temp - 1;
             if checker_count >= 2 {
                 self.check_mask = 0;
                 return;
             }
+            temp &= temp - 1;
         }
 
-        // Diagonal sliders (bishops + queen diagonal rays)
+        let king_bishop_rays = Self::get_bishop_moves(our_king, self.occupied, 0);
         let mut temp = king_bishop_rays & (opp_bishops | opp_queens);
         while temp != 0 {
             let checker = temp & temp.wrapping_neg();
             let checker_rays = Self::get_bishop_moves(checker, self.occupied, 0);
             mask |= (king_bishop_rays & checker_rays) | checker;
             checker_count += 1;
-            temp &= temp - 1;
             if checker_count >= 2 {
                 self.check_mask = 0;
                 return;
             }
+            temp &= temp - 1;
         }
 
         self.check_mask = mask;
     }
 
     pub fn update_white_legal_moves(&mut self) {
-        self.white_legal_mask = 0u64;
-        self.white_attack_mask = 0u64;
-        self.white_legal_moves = [0u64; 64];
+        self.white_legal_mask = 0;
+        self.white_attack_mask = 0;
+        self.white_legal_moves = [0; 64];
 
-        for i in 0..64 {
-            let pos = 1u64 << i;
+        let mut pieces = self.white_pieces;
+        while pieces != 0 {
+            let pos = pieces & pieces.wrapping_neg(); // Isolate LSB
+            let i = pos.trailing_zeros() as usize;
+
             self.white_attack_mask |= self.get_raw_attacks(pos, true);
             self.white_legal_moves[i] = self.get_piece_moves(pos, self.white_pieces);
             self.white_legal_mask |= self.white_legal_moves[i];
+
+            pieces &= pieces - 1; // Clear LSB
         }
     }
 
     pub fn update_black_legal_moves(&mut self) {
-        self.black_legal_mask = 0u64;
-        self.black_attack_mask = 0u64;
-        self.black_legal_moves = [0u64; 64];
+        self.black_legal_mask = 0;
+        self.black_attack_mask = 0;
+        self.black_legal_moves = [0; 64];
 
-        for i in 0..64 {
-            let pos = 1u64 << i;
+        let mut pieces = self.black_pieces;
+        while pieces != 0 {
+            let pos = pieces & pieces.wrapping_neg();
+            let i = pos.trailing_zeros() as usize;
+
             self.black_attack_mask |= self.get_raw_attacks(pos, false);
             self.black_legal_moves[i] = self.get_piece_moves(pos, self.black_pieces);
             self.black_legal_mask |= self.black_legal_moves[i];
+
+            pieces &= pieces - 1;
         }
     }
 
     pub fn get_raw_attacks(&self, pos: u64, is_white: bool) -> u64 {
-        let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
-        let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
+        let idx = pos.trailing_zeros() as usize;
 
         if is_white {
             if pos & self.white_pawns != 0 {
-                return ((pos << 9) & not_a_file) | ((pos << 7) & not_h_file);
+                return ((pos << 9) & NOT_A_FILE) | ((pos << 7) & NOT_H_FILE);
             } else if pos & self.white_knights != 0 {
-                return Self::get_knight_moves(pos, 0);
+                return KNIGHT_ATTACKS[idx];
             } else if pos & self.white_bishops != 0 {
                 return Self::get_bishop_moves(pos, self.occupied, 0);
             } else if pos & self.white_rooks != 0 {
@@ -411,22 +446,13 @@ impl GameState {
             } else if pos & self.white_queens != 0 {
                 return Self::get_queen_moves(pos, self.occupied, 0);
             } else if pos & self.white_king != 0 {
-                let mut moves = 0u64;
-                moves |= pos << 8;
-                moves |= pos >> 8;
-                moves |= (pos << 1) & not_a_file;
-                moves |= (pos >> 1) & not_h_file;
-                moves |= (pos << 9) & not_a_file;
-                moves |= (pos << 7) & not_h_file;
-                moves |= (pos >> 7) & not_a_file;
-                moves |= (pos >> 9) & not_h_file;
-                return moves;
+                return KING_ATTACKS[idx];
             }
         } else {
             if pos & self.black_pawns != 0 {
-                return ((pos >> 7) & not_a_file) | ((pos >> 9) & not_h_file);
+                return ((pos >> 7) & NOT_A_FILE) | ((pos >> 9) & NOT_H_FILE);
             } else if pos & self.black_knights != 0 {
-                return Self::get_knight_moves(pos, 0);
+                return KNIGHT_ATTACKS[idx];
             } else if pos & self.black_bishops != 0 {
                 return Self::get_bishop_moves(pos, self.occupied, 0);
             } else if pos & self.black_rooks != 0 {
@@ -434,122 +460,123 @@ impl GameState {
             } else if pos & self.black_queens != 0 {
                 return Self::get_queen_moves(pos, self.occupied, 0);
             } else if pos & self.black_king != 0 {
-                let mut moves = 0u64;
-                moves |= pos << 8;
-                moves |= pos >> 8;
-                moves |= (pos << 1) & not_a_file;
-                moves |= (pos >> 1) & not_h_file;
-                moves |= (pos << 9) & not_a_file;
-                moves |= (pos << 7) & not_h_file;
-                moves |= (pos >> 7) & not_a_file;
-                moves |= (pos >> 9) & not_h_file;
-                return moves;
+                return KING_ATTACKS[idx];
             }
         }
-
         0
     }
 
-    pub fn get_piece_moves(&self, pos: u64, mask: u64) -> u64 {
-        if pos & mask == 0 {
-            return 0;
-        }
-
-        let mut pin_mask = 0xFFFFFFFFFFFFFFFFu64;
-        for i in 0..8 {
-            if pos & self.king_pin_lines[i] != 0 {
-                pin_mask = self.king_pin_lines[i];
+    pub fn get_piece_moves(&self, pos: u64, own_pieces: u64) -> u64 {
+        let mut pin_mask = !0u64;
+        for &line in &self.king_pin_lines {
+            if pos & line != 0 {
+                pin_mask = line;
+                break;
             }
         }
 
-        let is_king = (pos & self.white_king) != 0 || (pos & self.black_king) != 0;
+        let is_king = (pos & (self.white_king | self.black_king)) != 0;
+        let idx = pos.trailing_zeros() as usize;
 
         let moves = if (pos & self.white_pawns) != 0 {
-            Self::get_pawn_moves(
-                pos,
-                self.occupied,
-                self.white_pieces,
-                true,
-                self.en_passant_target,
-            )
+            Self::get_pawn_moves(pos, self.occupied, own_pieces, true, self.en_passant_target)
         } else if (pos & self.black_pawns) != 0 {
             Self::get_pawn_moves(
                 pos,
                 self.occupied,
-                self.black_pieces,
+                own_pieces,
                 false,
                 self.en_passant_target,
             )
-        } else if (pos & self.white_knights) != 0 {
-            Self::get_knight_moves(pos, self.white_pieces)
-        } else if (pos & self.white_bishops) != 0 {
-            Self::get_bishop_moves(pos, self.occupied, self.white_pieces)
-        } else if (pos & self.white_rooks) != 0 {
-            Self::get_rook_moves(pos, self.occupied, self.white_pieces)
-        } else if (pos & self.white_queens) != 0 {
-            Self::get_queen_moves(pos, self.occupied, self.white_pieces)
-        } else if (pos & self.white_king) != 0 {
-            self.get_king_moves(pos, self.white_pieces) | self.get_castling_moves()
-        } else if (pos & self.black_knights) != 0 {
-            Self::get_knight_moves(pos, self.black_pieces)
-        } else if (pos & self.black_bishops) != 0 {
-            Self::get_bishop_moves(pos, self.occupied, self.black_pieces)
-        } else if (pos & self.black_rooks) != 0 {
-            Self::get_rook_moves(pos, self.occupied, self.black_pieces)
-        } else if (pos & self.black_queens) != 0 {
-            Self::get_queen_moves(pos, self.occupied, self.black_pieces)
-        } else if (pos & self.black_king) != 0 {
-            self.get_king_moves(pos, self.black_pieces) | self.get_castling_moves()
+        } else if (pos & (self.white_knights | self.black_knights)) != 0 {
+            KNIGHT_ATTACKS[idx] & !own_pieces
+        } else if (pos & (self.white_bishops | self.black_bishops)) != 0 {
+            Self::get_bishop_moves(pos, self.occupied, own_pieces)
+        } else if (pos & (self.white_rooks | self.black_rooks)) != 0 {
+            Self::get_rook_moves(pos, self.occupied, own_pieces)
+        } else if (pos & (self.white_queens | self.black_queens)) != 0 {
+            Self::get_queen_moves(pos, self.occupied, own_pieces)
+        } else if is_king {
+            let opp_attack = if self.white_to_move {
+                self.black_attack_mask
+            } else {
+                self.white_attack_mask
+            };
+            ((KING_ATTACKS[idx] & !own_pieces) & !opp_attack) | self.get_castling_moves()
         } else {
             0
         };
 
         if is_king {
-            // Kings are NOT filtered by check_mask — they handle their own safety
             moves & pin_mask
         } else {
-            // Non-king pieces must stay on their pin line AND resolve the check.
             moves & pin_mask & self.check_mask
         }
     }
 
     pub fn get_castling_moves(&self) -> u64 {
         let mut moves = 0u64;
+        let opp_attacks = if self.white_to_move {
+            self.black_attack_mask
+        } else {
+            self.white_attack_mask
+        };
 
         if self.white_to_move {
-            let ks_clear = 0x0000000000000060u64;
-            if self.white_castle_kingside && (self.occupied & ks_clear == 0) {
+            let ks_clear = 0x0000000000000060u64; // f1, g1
+            let ks_safe = 0x0000000000000070u64; // e1, f1, g1
+
+            if self.white_castle_kingside
+                && (self.occupied & ks_clear == 0)
+                && (opp_attacks & ks_safe == 0)
+            {
                 moves |= 0x0000000000000040; // g1
             }
-            let qs_clear = 0x000000000000000Eu64;
-            if self.white_castle_queenside && (self.occupied & qs_clear == 0) {
+
+            let qs_clear = 0x000000000000000Eu64; // b1, c1, d1
+            let qs_safe = 0x000000000000001Cu64; // e1, d1, c1
+
+            if self.white_castle_queenside
+                && (self.occupied & qs_clear == 0)
+                && (opp_attacks & qs_safe == 0)
+            {
                 moves |= 0x0000000000000004; // c1
             }
         } else {
-            let ks_clear = 0x6000000000000000u64;
-            if self.black_castle_kingside && (self.occupied & ks_clear == 0) {
+            let ks_clear = 0x6000000000000000u64; // f8, g8
+            let ks_safe = 0x7000000000000000u64; // e8, f8, g8
+
+            if self.black_castle_kingside
+                && (self.occupied & ks_clear == 0)
+                && (opp_attacks & ks_safe == 0)
+            {
                 moves |= 0x4000000000000000; // g8
             }
-            let qs_clear = 0x0E00000000000000u64;
-            if self.black_castle_queenside && (self.occupied & qs_clear == 0) {
+
+            let qs_clear = 0x0E00000000000000u64; // b8, c8, d8
+            let qs_safe = 0x1C00000000000000u64; // e8, d8, c8
+
+            if self.black_castle_queenside
+                && (self.occupied & qs_clear == 0)
+                && (opp_attacks & qs_safe == 0)
+            {
                 moves |= 0x0400000000000000; // c8
             }
         }
-
         moves
     }
 
     pub fn get_king_pin_lines(&self, pos: u64) -> [u64; 8] {
         let mut pin_lines = [0u64; 8];
         let directions = [
-            (8, 0xFF00000000000000u64, true),   // north
-            (-8, 0x00000000000000FFu64, true),  // south
-            (1, 0xFEFEFEFEFEFEFEFEu64, true),   // east
-            (-1, 0x7F7F7F7F7F7F7F7Fu64, true),  // west
-            (9, 0xFEFEFEFEFEFEFEFEu64, false),  // north-east
-            (7, 0x7F7F7F7F7F7F7F7Fu64, false),  // north-west
-            (-7, 0xFEFEFEFEFEFEFEFEu64, false), // south-east
-            (-9, 0x7F7F7F7F7F7F7F7Fu64, false), // south-west
+            (8, !0xFF00000000000000u64, true),  // north
+            (-8, !0x00000000000000FFu64, true), // south
+            (1, NOT_A_FILE, true),              // east
+            (-1, NOT_H_FILE, true),             // west
+            (9, NOT_A_FILE, false),             // north-east
+            (7, NOT_H_FILE, false),             // north-west
+            (-7, NOT_A_FILE, false),            // south-east
+            (-9, NOT_H_FILE, false),            // south-west
         ];
 
         let cardinal_terminators =
@@ -605,94 +632,38 @@ impl GameState {
         pin_lines
     }
 
-    pub fn get_knight_moves(pos: u64, own_pieces: u64) -> u64 {
-        let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
-        let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
-        let not_ab_file = 0xFCFCFCFCFCFCFCFCu64;
-        let not_gh_file = 0x3F3F3F3F3F3F3F3Fu64;
-
-        let mut moves = 0u64;
-        moves |= (pos << 17) & not_a_file;
-        moves |= (pos << 15) & not_h_file;
-        moves |= (pos << 10) & not_ab_file;
-        moves |= (pos << 6) & not_gh_file;
-        moves |= (pos >> 17) & not_h_file;
-        moves |= (pos >> 15) & not_a_file;
-        moves |= (pos >> 10) & not_gh_file;
-        moves |= (pos >> 6) & not_ab_file;
-        moves & !own_pieces
-    }
-
-    pub fn get_king_moves(&self, pos: u64, own_pieces: u64) -> u64 {
-        let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
-        let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
-
-        let mut moves = 0u64;
-        moves |= pos << 8;
-        moves |= pos >> 8;
-        moves |= (pos << 1) & not_a_file;
-        moves |= (pos >> 1) & not_h_file;
-        moves |= (pos << 9) & not_a_file;
-        moves |= (pos << 7) & not_h_file;
-        moves |= (pos >> 7) & not_a_file;
-        moves |= (pos >> 9) & not_h_file;
-
-        let opponent_attack_mask = if self.white_to_move {
-            self.black_attack_mask
-        } else {
-            self.white_attack_mask
-        };
-
-        (moves & !own_pieces) & !opponent_attack_mask
-    }
-
     pub fn get_rook_moves(pos: u64, occupied: u64, own_pieces: u64) -> u64 {
         let mut moves = 0u64;
-
         let mut ray = pos;
-        loop {
+        while ray != 0 {
             ray <<= 8;
-            if ray == 0 {
-                break;
-            }
             moves |= ray;
             if ray & occupied != 0 {
                 break;
             }
         }
 
-        let mut ray = pos;
-        loop {
+        ray = pos;
+        while ray != 0 {
             ray >>= 8;
-            if ray == 0 {
-                break;
-            }
             moves |= ray;
             if ray & occupied != 0 {
                 break;
             }
         }
 
-        let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
-        let mut ray = pos;
-        loop {
-            ray = (ray << 1) & not_a_file;
-            if ray == 0 {
-                break;
-            }
+        ray = pos;
+        while ray != 0 {
+            ray = (ray << 1) & NOT_A_FILE;
             moves |= ray;
             if ray & occupied != 0 {
                 break;
             }
         }
 
-        let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
-        let mut ray = pos;
-        loop {
-            ray = (ray >> 1) & not_h_file;
-            if ray == 0 {
-                break;
-            }
+        ray = pos;
+        while ray != 0 {
+            ray = (ray >> 1) & NOT_H_FILE;
             moves |= ray;
             if ray & occupied != 0 {
                 break;
@@ -704,51 +675,37 @@ impl GameState {
 
     pub fn get_bishop_moves(pos: u64, occupied: u64, own_pieces: u64) -> u64 {
         let mut moves = 0u64;
-        let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
-        let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
-
         let mut ray = pos;
-        loop {
-            ray = (ray << 9) & not_a_file;
-            if ray == 0 {
-                break;
-            }
+
+        while ray != 0 {
+            ray = (ray << 9) & NOT_A_FILE;
             moves |= ray;
             if ray & occupied != 0 {
                 break;
             }
         }
 
-        let mut ray = pos;
-        loop {
-            ray = (ray << 7) & not_h_file;
-            if ray == 0 {
-                break;
-            }
+        ray = pos;
+        while ray != 0 {
+            ray = (ray << 7) & NOT_H_FILE;
             moves |= ray;
             if ray & occupied != 0 {
                 break;
             }
         }
 
-        let mut ray = pos;
-        loop {
-            ray = (ray >> 7) & not_a_file;
-            if ray == 0 {
-                break;
-            }
+        ray = pos;
+        while ray != 0 {
+            ray = (ray >> 7) & NOT_A_FILE;
             moves |= ray;
             if ray & occupied != 0 {
                 break;
             }
         }
 
-        let mut ray = pos;
-        loop {
-            ray = (ray >> 9) & not_h_file;
-            if ray == 0 {
-                break;
-            }
+        ray = pos;
+        while ray != 0 {
+            ray = (ray >> 9) & NOT_H_FILE;
             moves |= ray;
             if ray & occupied != 0 {
                 break;
@@ -774,33 +731,27 @@ impl GameState {
         let empty = !occupied;
         let enemy_pieces = occupied & !own_pieces;
 
-        let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
-        let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
-        let rank_4 = 0x00000000FF000000u64;
-        let rank_5 = 0x000000FF00000000u64;
-
         if is_white {
             let single_push = (pos << 8) & empty;
             moves |= single_push;
-            moves |= (single_push << 8) & empty & rank_4;
-            moves |= (pos << 9) & not_a_file & enemy_pieces;
-            moves |= (pos << 7) & not_h_file & enemy_pieces;
+            moves |= (single_push << 8) & empty & RANK_4;
+            moves |= (pos << 9) & NOT_A_FILE & enemy_pieces;
+            moves |= (pos << 7) & NOT_H_FILE & enemy_pieces;
             if ep_target != 0 {
-                moves |= (pos << 9) & not_a_file & ep_target;
-                moves |= (pos << 7) & not_h_file & ep_target;
+                moves |= (pos << 9) & NOT_A_FILE & ep_target;
+                moves |= (pos << 7) & NOT_H_FILE & ep_target;
             }
         } else {
             let single_push = (pos >> 8) & empty;
             moves |= single_push;
-            moves |= (single_push >> 8) & empty & rank_5;
-            moves |= (pos >> 7) & not_a_file & enemy_pieces;
-            moves |= (pos >> 9) & not_h_file & enemy_pieces;
+            moves |= (single_push >> 8) & empty & RANK_5;
+            moves |= (pos >> 7) & NOT_A_FILE & enemy_pieces;
+            moves |= (pos >> 9) & NOT_H_FILE & enemy_pieces;
             if ep_target != 0 {
-                moves |= (pos >> 7) & not_a_file & ep_target;
-                moves |= (pos >> 9) & not_h_file & ep_target;
+                moves |= (pos >> 7) & NOT_A_FILE & ep_target;
+                moves |= (pos >> 9) & NOT_H_FILE & ep_target;
             }
         }
-
         moves & !own_pieces
     }
 }

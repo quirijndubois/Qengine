@@ -5,13 +5,12 @@ use eframe::egui;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::io::Cursor;
 
-// Embed sound files at compile time
 const MOVE_SOUND: &[u8] = include_bytes!("../sounds/Move.ogg");
 const CAPTURE_SOUND: &[u8] = include_bytes!("../sounds/Capture.ogg");
-const ERROR_SOUND: &[u8] = include_bytes!("../sounds/Error.ogg");
 
 pub const SQUARE_SIZE: f32 = 80.0;
-pub const BOARD_ORIGIN: egui::Pos2 = egui::pos2(20.0, 20.0);
+pub const BOARD_SIZE: f32 = SQUARE_SIZE * 8.0;
+pub const BOARD_ORIGIN: egui::Pos2 = egui::pos2(15.0, 15.0);
 
 pub struct ChessApp {
     pub selected_cell: Option<i32>,
@@ -39,7 +38,7 @@ impl ChessApp {
             let cursor = Cursor::new(bytes);
             if let Ok(source) = Decoder::new(cursor) {
                 sink.append(source);
-                sink.detach(); // plays without blocking
+                sink.detach();
             }
         }
     }
@@ -54,157 +53,197 @@ impl ChessApp {
         )
     }
 
-    fn draw_square(painter: &egui::Painter, col: usize, row: usize, r: u8, g: u8, b: u8, a: u8) {
-        let color = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+    fn draw_square(painter: &egui::Painter, col: usize, row: usize, color: egui::Color32) {
         let rect = Self::square_rect(col, 7 - row);
         painter.rect_filled(rect, 0.0, color);
     }
 
     fn draw_piece(ui: &mut egui::Ui, col: usize, row: usize, piece: &Piece) {
-        let rect = Self::square_rect(col as usize, 7 - row as usize).shrink(5.0);
+        let rect = Self::square_rect(col as usize, 7 - row as usize);
         let (name, bytes) = piece.asset_data();
-        ui.put(rect.shrink(5.0), egui::Image::from_bytes(name, bytes));
+        ui.put(rect.shrink(10.0), egui::Image::from_bytes(name, bytes));
     }
 }
 
 impl eframe::App for ChessApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
-            let painter = ui.painter();
-
-            //convert selected cell to mask
+            // Fetch legal moves as a COPY to avoid borrow checker errors
             let legal_moves = if self.game_state.white_to_move {
                 self.game_state.white_legal_moves
             } else {
                 self.game_state.black_legal_moves
             };
 
-            // Draw Squares
-            for row in 0..8 {
-                for col in 0..8 {
-                    let color = if (row + col) % 2 == 0 {
-                        (181, 136, 99)
+            ui.horizontal_top(|ui| {
+                // --- LEFT: BOARD CONTAINER ---
+                ui.vertical(|ui| {
+                    let (board_rect, _) = ui.allocate_at_least(
+                        egui::vec2(BOARD_SIZE + 20.0, BOARD_SIZE + 20.0),
+                        egui::Sense::click_and_drag(),
+                    );
+
+                    let painter = ui.painter_at(board_rect);
+
+                    // 1. Draw Squares & Highlights
+                    for row in 0..8 {
+                        for col in 0..8 {
+                            let is_dark = (row + col) % 2 == 0;
+                            let base_color = if is_dark {
+                                egui::Color32::from_rgb(181, 136, 99)
+                            } else {
+                                egui::Color32::from_rgb(240, 217, 181)
+                            };
+
+                            Self::draw_square(&painter, col, row, base_color);
+
+                            let index = row * 8 + col;
+                            let move_mask = 1u64 << index;
+
+                            if let Some(sel) = self.selected_cell {
+                                if sel == index as i32 {
+                                    // Highlight selected square (Yellow)
+                                    Self::draw_square(
+                                        &painter,
+                                        col,
+                                        row,
+                                        egui::Color32::from_rgba_unmultiplied(255, 255, 0, 120),
+                                    );
+                                } else if legal_moves[sel as usize] & move_mask != 0 {
+                                    // Highlight legal move (Subtle Green)
+                                    Self::draw_square(
+                                        &painter,
+                                        col,
+                                        row,
+                                        egui::Color32::from_rgba_unmultiplied(0, 255, 0, 50),
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Draw Pieces
+                    for pos in 0..64 {
+                        let col = pos % 8;
+                        let row = pos / 8;
+                        let mask = 1u64 << pos;
+
+                        let piece_opt = if (self.game_state.white_pawns & mask) != 0 {
+                            Some(Piece::WhitePawn)
+                        } else if (self.game_state.white_knights & mask) != 0 {
+                            Some(Piece::WhiteKnight)
+                        } else if (self.game_state.white_bishops & mask) != 0 {
+                            Some(Piece::WhiteBishop)
+                        } else if (self.game_state.white_rooks & mask) != 0 {
+                            Some(Piece::WhiteRook)
+                        } else if (self.game_state.white_queens & mask) != 0 {
+                            Some(Piece::WhiteQueen)
+                        } else if (self.game_state.white_king & mask) != 0 {
+                            Some(Piece::WhiteKing)
+                        } else if (self.game_state.black_pawns & mask) != 0 {
+                            Some(Piece::BlackPawn)
+                        } else if (self.game_state.black_knights & mask) != 0 {
+                            Some(Piece::BlackKnight)
+                        } else if (self.game_state.black_bishops & mask) != 0 {
+                            Some(Piece::BlackBishop)
+                        } else if (self.game_state.black_rooks & mask) != 0 {
+                            Some(Piece::BlackRook)
+                        } else if (self.game_state.black_queens & mask) != 0 {
+                            Some(Piece::BlackQueen)
+                        } else if (self.game_state.black_king & mask) != 0 {
+                            Some(Piece::BlackKing)
+                        } else {
+                            None
+                        };
+
+                        if let Some(piece) = piece_opt {
+                            Self::draw_piece(ui, col, row, &piece);
+                        }
+                    }
+                });
+
+                // --- RIGHT: UI PANEL ---
+                ui.vertical(|ui| {
+                    ui.heading(egui::RichText::new("Qengine").size(32.0).strong());
+                    ui.separator();
+
+                    ui.add_space(20.0);
+                    let turn = if self.game_state.white_to_move {
+                        "WHITE"
                     } else {
-                        (240, 217, 181)
+                        "BLACK"
+                    };
+                    let turn_color = if self.game_state.white_to_move {
+                        egui::Color32::LIGHT_BLUE
+                    } else {
+                        egui::Color32::LIGHT_GRAY
                     };
 
-                    Self::draw_square(painter, col, row, color.0, color.1, color.2, 255);
+                    ui.label(
+                        egui::RichText::new(format!("TURN: {}", turn))
+                            .size(22.0)
+                            .color(turn_color)
+                            .strong(),
+                    );
 
-                    let move_mask = 1u64 << (row * 8 + col);
+                    let total_moves: u32 = legal_moves.iter().map(|m| m.count_ones()).sum();
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(format!("Legal Moves: {}", total_moves)).size(16.0),
+                    );
 
-                    if let Some(sel_index) = self.selected_cell {
-                        if legal_moves[sel_index as usize] & move_mask != 0 {
-                            Self::draw_square(painter, col, row, 0, 255, 0, 100);
-                        }
-                    }
-
-                    if (self.game_state.white_legal_mask & self.game_state.black_king) & move_mask
-                        != 0
+                    ui.add_space(40.0);
+                    if ui
+                        .button(egui::RichText::new("RESTART GAME").size(18.0))
+                        .clicked()
                     {
-                        Self::draw_square(painter, col, row, 255, 0, 0, 100);
+                        self.game_state = GameState::new();
+                        self.selected_cell = None;
                     }
+                });
 
-                    if (self.game_state.black_legal_mask & self.game_state.white_king) & move_mask
-                        != 0
-                    {
-                        Self::draw_square(painter, col, row, 255, 0, 0, 100);
-                    }
+                // --- CLICK INTERACTION ---
+                if ui.input(|i| i.pointer.any_pressed()) {
+                    if let Some(ptr_pos) = ui.input(|i| i.pointer.interact_pos()) {
+                        let col = ((ptr_pos.x - BOARD_ORIGIN.x) / SQUARE_SIZE).floor() as i32;
+                        let row = 7 - ((ptr_pos.y - BOARD_ORIGIN.y) / SQUARE_SIZE).floor() as i32;
 
-                    let p = self.game_state.king_pin_lines;
-                    if (p[0] | p[1] | p[2] | p[3] | p[4] | p[5] | p[6] | p[7]) & move_mask != 0 {
-                        Self::draw_square(painter, col, row, 0, 0, 255, 100);
-                    }
-
-                    if let Some(sel_index) = self.selected_cell {
-                        let sel_col = sel_index as usize % 8;
-                        let sel_row = sel_index as usize / 8;
-                        if sel_col == col && sel_row == row {
-                            Self::draw_square(painter, col, row, 255, 255, 0, 255);
-                        }
-                    }
-                }
-            }
-
-            for pos in 0..64 {
-                let col = pos % 8;
-                let row = pos / 8;
-
-                let piece_opt = if (self.game_state.white_pawns >> pos) & 1 == 1 {
-                    Some(Piece::WhitePawn)
-                } else if (self.game_state.white_knights >> pos) & 1 == 1 {
-                    Some(Piece::WhiteKnight)
-                } else if (self.game_state.white_bishops >> pos) & 1 == 1 {
-                    Some(Piece::WhiteBishop)
-                } else if (self.game_state.white_rooks >> pos) & 1 == 1 {
-                    Some(Piece::WhiteRook)
-                } else if (self.game_state.white_queens >> pos) & 1 == 1 {
-                    Some(Piece::WhiteQueen)
-                } else if (self.game_state.white_king >> pos) & 1 == 1 {
-                    Some(Piece::WhiteKing)
-                } else if (self.game_state.black_pawns >> pos) & 1 == 1 {
-                    Some(Piece::BlackPawn)
-                } else if (self.game_state.black_knights >> pos) & 1 == 1 {
-                    Some(Piece::BlackKnight)
-                } else if (self.game_state.black_bishops >> pos) & 1 == 1 {
-                    Some(Piece::BlackBishop)
-                } else if (self.game_state.black_rooks >> pos) & 1 == 1 {
-                    Some(Piece::BlackRook)
-                } else if (self.game_state.black_queens >> pos) & 1 == 1 {
-                    Some(Piece::BlackQueen)
-                } else if (self.game_state.black_king >> pos) & 1 == 1 {
-                    Some(Piece::BlackKing)
-                } else {
-                    None
-                };
-
-                if let Some(piece) = piece_opt {
-                    Self::draw_piece(ui, col as usize, row as usize, &piece);
-                }
-            }
-
-            // handle clicks
-            if ui.input(|i| i.pointer.any_pressed()) {
-                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                    let col = ((pos.x - BOARD_ORIGIN.x) / SQUARE_SIZE) as i32;
-                    let row = 7 - ((pos.y - BOARD_ORIGIN.y) / SQUARE_SIZE) as i32;
-                    let index = row * 8 + col;
-                    if (0..8).contains(&col) && (0..8).contains(&row) {
-                        if let Some(sel_index) = self.selected_cell {
-                            let from_mask = 1u64 << sel_index;
-                            let to_mask = 1u64 << index;
-
-                            if legal_moves[sel_index as usize] & to_mask == 0 {
-                                self.selected_cell = None;
-                                return;
-                            }
-
-                            let is_take = self.game_state.occupied & to_mask != 0;
-
-                            self.game_state = self.game_state.make_move(from_mask, to_mask);
-
-                            if self.game_state.white_is_checked || self.game_state.black_is_checked
-                            {
-                                self.play_sound(ERROR_SOUND);
-                            } else if is_take {
-                                self.play_sound(CAPTURE_SOUND);
+                        if (0..8).contains(&col) && (0..8).contains(&row) {
+                            let index = row * 8 + col;
+                            let target_mask = 1u64 << index;
+                            let own_pieces = if self.game_state.white_to_move {
+                                self.game_state.white_pieces
                             } else {
-                                self.play_sound(MOVE_SOUND);
+                                self.game_state.black_pieces
+                            };
+
+                            if let Some(sel) = self.selected_cell {
+                                if sel == index {
+                                    self.selected_cell = None; // Deselect
+                                } else if legal_moves[sel as usize] & target_mask != 0 {
+                                    let is_take = (self.game_state.occupied & target_mask) != 0;
+                                    self.game_state =
+                                        self.game_state.make_move(1u64 << sel, target_mask);
+
+                                    if is_take {
+                                        self.play_sound(CAPTURE_SOUND);
+                                    } else {
+                                        self.play_sound(MOVE_SOUND);
+                                    }
+
+                                    self.selected_cell = None;
+                                } else if (own_pieces & target_mask) != 0 {
+                                    self.selected_cell = Some(index); // Switch selection
+                                } else {
+                                    self.selected_cell = None; // Clicked empty/enemy invalidly
+                                }
+                            } else if (own_pieces & target_mask) != 0 {
+                                self.selected_cell = Some(index); // Initial select
                             }
-
-                            self.selected_cell = None;
-                            return;
-                        }
-
-                        if Some(index) == self.selected_cell {
-                            self.selected_cell = None;
-                        } else {
-                            self.selected_cell = Some(index);
                         }
                     }
                 }
-                ui.request_repaint();
-            }
-
+            });
             ui.request_repaint();
         });
     }
