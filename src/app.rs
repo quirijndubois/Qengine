@@ -26,7 +26,7 @@ impl ChessApp {
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
 
         Self {
-            game_state: GameState::new(),
+            game_state: GameState::new("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
             selected_cell: None,
             _stream,
             stream_handle,
@@ -192,12 +192,26 @@ impl eframe::App for ChessApp {
                         egui::RichText::new(format!("Legal Moves: {}", total_moves)).size(16.0),
                     );
 
+                    ui.add_space(20.0);
+
+                    let evaluation = self.game_state.evaluate();
+                    let eval_text = if evaluation > 0 {
+                        format!("Evaluation: +{:.2}", evaluation as f32 / 100.0)
+                    } else if evaluation < 0 {
+                        format!("Evaluation: {:.2}", evaluation as f32 / 100.0)
+                    } else {
+                        "Evaluation: 0.00".to_string()
+                    };
+                    ui.label(egui::RichText::new(eval_text).size(16.0));
+
                     ui.add_space(40.0);
                     if ui
                         .button(egui::RichText::new("RESTART GAME").size(18.0))
                         .clicked()
                     {
-                        self.game_state = GameState::new();
+                        self.game_state = GameState::new(
+                            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                        );
                         self.selected_cell = None;
                     }
                 });
@@ -222,8 +236,7 @@ impl eframe::App for ChessApp {
                                     self.selected_cell = None; // Deselect
                                 } else if legal_moves[sel as usize] & target_mask != 0 {
                                     let is_take = (self.game_state.occupied & target_mask) != 0;
-                                    self.game_state =
-                                        self.game_state.make_move(1u64 << sel, target_mask);
+                                    self.game_state.make_move(1u64 << sel, target_mask);
 
                                     if is_take {
                                         self.play_sound(CAPTURE_SOUND);
