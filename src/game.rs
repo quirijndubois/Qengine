@@ -24,9 +24,13 @@ pub struct GameState {
 
     pub white_legal_moves: [u64; 64],
     pub white_legal_mask: u64,
+    pub white_attack_mask: u64,
 
     pub black_legal_moves: [u64; 64],
     pub black_legal_mask: u64,
+    pub black_attack_mask: u64,
+
+    pub check_mask: u64,
 
     pub white_castle_kingside: bool,
     pub white_castle_queenside: bool,
@@ -58,15 +62,19 @@ impl GameState {
             white_to_move: true,
 
             occupied: 0u64,
-            white_pieces: 064,
-            black_pieces: 064,
+            white_pieces: 0u64,
+            black_pieces: 0u64,
             king_pin_lines: [0u64; 8],
 
             white_legal_moves: [0u64; 64],
             white_legal_mask: 0u64,
+            white_attack_mask: 0u64,
 
             black_legal_moves: [0u64; 64],
             black_legal_mask: 0u64,
+            black_attack_mask: 0u64,
+
+            check_mask: 0xFFFFFFFFFFFFFFFFu64,
 
             white_castle_kingside: true,
             white_castle_queenside: true,
@@ -150,7 +158,6 @@ impl GameState {
             remove(&mut new_state.white_pawns);
             place(&mut new_state.white_pawns);
 
-            // en passant logic
             if to == from << 16 {
                 new_state.en_passant_target = from << 8;
             }
@@ -174,7 +181,6 @@ impl GameState {
             remove(&mut new_state.white_king);
             place(&mut new_state.white_king);
 
-            // castling logic
             new_state.white_castle_kingside = false;
             new_state.white_castle_queenside = false;
 
@@ -190,7 +196,6 @@ impl GameState {
             remove(&mut new_state.black_pawns);
             place(&mut new_state.black_pawns);
 
-            // en passant logic
             if to == from >> 16 {
                 new_state.en_passant_target = from >> 8;
             }
@@ -213,7 +218,6 @@ impl GameState {
             remove(&mut new_state.black_king);
             place(&mut new_state.black_king);
 
-            // castling logic
             new_state.black_castle_kingside = false;
             new_state.black_castle_queenside = false;
 
@@ -229,20 +233,17 @@ impl GameState {
             return self.clone();
         }
 
-        // Revoke castling rights if a rook moves from or is captured on its starting square
-        // White rooks
         if from == 0x0000000000000080 || to == 0x0000000000000080 {
-            new_state.white_castle_kingside = false; // h1 rook gone
+            new_state.white_castle_kingside = false;
         }
         if from == 0x0000000000000001 || to == 0x0000000000000001 {
-            new_state.white_castle_queenside = false; // a1 rook gone
+            new_state.white_castle_queenside = false;
         }
-        // Black rooks
         if from == 0x8000000000000000 || to == 0x8000000000000000 {
-            new_state.black_castle_kingside = false; // h8 rook gone
+            new_state.black_castle_kingside = false;
         }
         if from == 0x0100000000000000 || to == 0x0100000000000000 {
-            new_state.black_castle_queenside = false; // a8 rook gone
+            new_state.black_castle_queenside = false;
         }
 
         new_state.white_to_move = !self.white_to_move;
@@ -250,40 +251,203 @@ impl GameState {
         new_state.update_derived();
         new_state.update_legal_moves();
 
-        new_state.white_is_checked = (new_state.black_legal_mask & new_state.white_king) != 0;
-        new_state.black_is_checked = (new_state.white_legal_mask & new_state.black_king) != 0;
+        new_state.white_is_checked = (new_state.black_attack_mask & new_state.white_king) != 0;
+        new_state.black_is_checked = (new_state.white_attack_mask & new_state.black_king) != 0;
 
         new_state
     }
 
     pub fn update_legal_moves(&mut self) {
-        //moves is an array with length 64 (each cell) where each element is a bitboard of legal
-        //moves for the piece on that cell (or 0 if no piece)
-
         if self.white_to_move {
             self.update_black_legal_moves();
+            self.compute_check_mask();
             self.update_white_legal_moves();
         } else {
             self.update_white_legal_moves();
+            self.compute_check_mask();
             self.update_black_legal_moves();
         }
+    }
+
+    pub fn compute_check_mask(&mut self) {
+        let (
+            our_king,
+            opponent_attack_mask,
+            opp_pawns,
+            opp_knights,
+            opp_bishops,
+            opp_rooks,
+            opp_queens,
+        ) = if self.white_to_move {
+            (
+                self.white_king,
+                self.black_attack_mask,
+                self.black_pawns,
+                self.black_knights,
+                self.black_bishops,
+                self.black_rooks,
+                self.black_queens,
+            )
+        } else {
+            (
+                self.black_king,
+                self.white_attack_mask,
+                self.white_pawns,
+                self.white_knights,
+                self.white_bishops,
+                self.white_rooks,
+                self.white_queens,
+            )
+        };
+
+        if opponent_attack_mask & our_king == 0 {
+            self.check_mask = 0xFFFFFFFFFFFFFFFFu64;
+            return;
+        }
+
+        let mut mask = 0u64;
+        let mut checker_count = 0u32;
+
+        let knight_checkers = Self::get_knight_moves(our_king, 0) & opp_knights;
+        if knight_checkers != 0 {
+            mask |= knight_checkers;
+            checker_count += knight_checkers.count_ones();
+        }
+
+        let (pawn_atk_l, pawn_atk_r) = if self.white_to_move {
+            (
+                (our_king << 9) & 0xFEFEFEFEFEFEFEFEu64,
+                (our_king << 7) & 0x7F7F7F7F7F7F7F7Fu64,
+            )
+        } else {
+            (
+                (our_king >> 7) & 0xFEFEFEFEFEFEFEFEu64,
+                (our_king >> 9) & 0x7F7F7F7F7F7F7F7Fu64,
+            )
+        };
+        let pawn_checkers = (pawn_atk_l | pawn_atk_r) & opp_pawns;
+        if pawn_checkers != 0 {
+            mask |= pawn_checkers;
+            checker_count += pawn_checkers.count_ones();
+        }
+
+        if checker_count >= 2 {
+            self.check_mask = 0;
+            return;
+        }
+
+        let king_rook_rays = Self::get_rook_moves(our_king, self.occupied, 0);
+        let king_bishop_rays = Self::get_bishop_moves(our_king, self.occupied, 0);
+
+        let mut temp = king_rook_rays & (opp_rooks | opp_queens);
+        while temp != 0 {
+            let checker = temp & temp.wrapping_neg(); // isolate LSB
+            let checker_rays = Self::get_rook_moves(checker, self.occupied, 0);
+            mask |= (king_rook_rays & checker_rays) | checker;
+            checker_count += 1;
+            temp &= temp - 1;
+            if checker_count >= 2 {
+                self.check_mask = 0;
+                return;
+            }
+        }
+
+        // Diagonal sliders (bishops + queen diagonal rays)
+        let mut temp = king_bishop_rays & (opp_bishops | opp_queens);
+        while temp != 0 {
+            let checker = temp & temp.wrapping_neg();
+            let checker_rays = Self::get_bishop_moves(checker, self.occupied, 0);
+            mask |= (king_bishop_rays & checker_rays) | checker;
+            checker_count += 1;
+            temp &= temp - 1;
+            if checker_count >= 2 {
+                self.check_mask = 0;
+                return;
+            }
+        }
+
+        self.check_mask = mask;
     }
 
     pub fn update_white_legal_moves(&mut self) {
         self.white_legal_mask = 0u64;
+        self.white_attack_mask = 0u64;
         self.white_legal_moves = [0u64; 64];
+
         for i in 0..64 {
-            self.white_legal_moves[i] = self.get_piece_moves(1u64 << i, self.white_pieces);
+            let pos = 1u64 << i;
+            self.white_attack_mask |= self.get_raw_attacks(pos, true);
+            self.white_legal_moves[i] = self.get_piece_moves(pos, self.white_pieces);
             self.white_legal_mask |= self.white_legal_moves[i];
         }
     }
+
     pub fn update_black_legal_moves(&mut self) {
         self.black_legal_mask = 0u64;
+        self.black_attack_mask = 0u64;
         self.black_legal_moves = [0u64; 64];
+
         for i in 0..64 {
-            self.black_legal_moves[i] = self.get_piece_moves(1u64 << i, self.black_pieces);
+            let pos = 1u64 << i;
+            self.black_attack_mask |= self.get_raw_attacks(pos, false);
+            self.black_legal_moves[i] = self.get_piece_moves(pos, self.black_pieces);
             self.black_legal_mask |= self.black_legal_moves[i];
         }
+    }
+
+    pub fn get_raw_attacks(&self, pos: u64, is_white: bool) -> u64 {
+        let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
+        let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
+
+        if is_white {
+            if pos & self.white_pawns != 0 {
+                return ((pos << 9) & not_a_file) | ((pos << 7) & not_h_file);
+            } else if pos & self.white_knights != 0 {
+                return Self::get_knight_moves(pos, 0);
+            } else if pos & self.white_bishops != 0 {
+                return Self::get_bishop_moves(pos, self.occupied, 0);
+            } else if pos & self.white_rooks != 0 {
+                return Self::get_rook_moves(pos, self.occupied, 0);
+            } else if pos & self.white_queens != 0 {
+                return Self::get_queen_moves(pos, self.occupied, 0);
+            } else if pos & self.white_king != 0 {
+                let mut moves = 0u64;
+                moves |= pos << 8;
+                moves |= pos >> 8;
+                moves |= (pos << 1) & not_a_file;
+                moves |= (pos >> 1) & not_h_file;
+                moves |= (pos << 9) & not_a_file;
+                moves |= (pos << 7) & not_h_file;
+                moves |= (pos >> 7) & not_a_file;
+                moves |= (pos >> 9) & not_h_file;
+                return moves;
+            }
+        } else {
+            if pos & self.black_pawns != 0 {
+                return ((pos >> 7) & not_a_file) | ((pos >> 9) & not_h_file);
+            } else if pos & self.black_knights != 0 {
+                return Self::get_knight_moves(pos, 0);
+            } else if pos & self.black_bishops != 0 {
+                return Self::get_bishop_moves(pos, self.occupied, 0);
+            } else if pos & self.black_rooks != 0 {
+                return Self::get_rook_moves(pos, self.occupied, 0);
+            } else if pos & self.black_queens != 0 {
+                return Self::get_queen_moves(pos, self.occupied, 0);
+            } else if pos & self.black_king != 0 {
+                let mut moves = 0u64;
+                moves |= pos << 8;
+                moves |= pos >> 8;
+                moves |= (pos << 1) & not_a_file;
+                moves |= (pos >> 1) & not_h_file;
+                moves |= (pos << 9) & not_a_file;
+                moves |= (pos << 7) & not_h_file;
+                moves |= (pos >> 7) & not_a_file;
+                moves |= (pos >> 9) & not_h_file;
+                return moves;
+            }
+        }
+
+        0
     }
 
     pub fn get_piece_moves(&self, pos: u64, mask: u64) -> u64 {
@@ -291,14 +455,14 @@ impl GameState {
             return 0;
         }
 
-        // make legal_mask with the entire board set to 1s
-        let mut legal_mask = 0xFFFFFFFFFFFFFFFFu64;
-
+        let mut pin_mask = 0xFFFFFFFFFFFFFFFFu64;
         for i in 0..8 {
             if pos & self.king_pin_lines[i] != 0 {
-                legal_mask = self.king_pin_lines[i];
+                pin_mask = self.king_pin_lines[i];
             }
         }
+
+        let is_king = (pos & self.white_king) != 0 || (pos & self.black_king) != 0;
 
         let moves = if (pos & self.white_pawns) != 0 {
             Self::get_pawn_moves(
@@ -340,7 +504,13 @@ impl GameState {
             0
         };
 
-        moves & legal_mask
+        if is_king {
+            // Kings are NOT filtered by check_mask — they handle their own safety
+            moves & pin_mask
+        } else {
+            // Non-king pieces must stay on their pin line AND resolve the check.
+            moves & pin_mask & self.check_mask
+        }
     }
 
     pub fn get_castling_moves(&self) -> u64 {
@@ -372,14 +542,14 @@ impl GameState {
     pub fn get_king_pin_lines(&self, pos: u64) -> [u64; 8] {
         let mut pin_lines = [0u64; 8];
         let directions = [
-            (8, 0xFF00000000000000u64, true),   // north       (cardinal)
-            (-8, 0x00000000000000FFu64, true),  // south       (cardinal)
-            (1, 0xFEFEFEFEFEFEFEFEu64, true),   // east        (cardinal)
-            (-1, 0x7F7F7F7F7F7F7F7Fu64, true),  // west        (cardinal)
-            (9, 0xFEFEFEFEFEFEFEFEu64, false),  // north-east  (diagonal)
-            (7, 0x7F7F7F7F7F7F7F7Fu64, false),  // north-west  (diagonal)
-            (-7, 0xFEFEFEFEFEFEFEFEu64, false), // south-east  (diagonal)
-            (-9, 0x7F7F7F7F7F7F7F7Fu64, false), // south-west  (diagonal)
+            (8, 0xFF00000000000000u64, true),   // north
+            (-8, 0x00000000000000FFu64, true),  // south
+            (1, 0xFEFEFEFEFEFEFEFEu64, true),   // east
+            (-1, 0x7F7F7F7F7F7F7F7Fu64, true),  // west
+            (9, 0xFEFEFEFEFEFEFEFEu64, false),  // north-east
+            (7, 0x7F7F7F7F7F7F7F7Fu64, false),  // north-west
+            (-7, 0xFEFEFEFEFEFEFEFEu64, false), // south-east
+            (-9, 0x7F7F7F7F7F7F7F7Fu64, false), // south-west
         ];
 
         let cardinal_terminators =
@@ -387,21 +557,22 @@ impl GameState {
         let diagonal_terminators =
             self.black_queens | self.white_queens | self.black_bishops | self.white_bishops;
 
+        let opponent_pieces = if self.white_to_move {
+            self.black_pieces
+        } else {
+            self.white_pieces
+        };
+
         for (i, &(shift, mask, is_cardinal)) in directions.iter().enumerate() {
             let terminators = if is_cardinal {
                 cardinal_terminators
             } else {
                 diagonal_terminators
             };
+
             let mut ray = pos;
             let mut line = 0u64;
             let mut passed_own_piece = false;
-
-            let opponent_legal_mask = if self.white_to_move {
-                self.black_legal_mask
-            } else {
-                self.white_legal_mask
-            };
 
             loop {
                 ray = if shift > 0 {
@@ -417,10 +588,8 @@ impl GameState {
                 line |= ray;
 
                 if ray & self.occupied != 0 {
-                    if ray & opponent_legal_mask != 0 {
-                        // Only commit the pin line if the terminating piece
-                        // is a slider that can actually attack on this axis.
-                        if passed_own_piece && (ray & terminators != 0) {
+                    if ray & opponent_pieces != 0 {
+                        if passed_own_piece && (ray & terminators) != 0 {
                             pin_lines[i] = line;
                         }
                         break;
@@ -435,6 +604,7 @@ impl GameState {
         }
         pin_lines
     }
+
     pub fn get_knight_moves(pos: u64, own_pieces: u64) -> u64 {
         let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
         let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
@@ -442,14 +612,14 @@ impl GameState {
         let not_gh_file = 0x3F3F3F3F3F3F3F3Fu64;
 
         let mut moves = 0u64;
-        moves |= (pos << 17) & not_a_file; // up 2, right 1
-        moves |= (pos << 15) & not_h_file; // up 2, left 1
-        moves |= (pos << 10) & not_ab_file; // up 1, right 2
-        moves |= (pos << 6) & not_gh_file; // up 1, left 2
-        moves |= (pos >> 17) & not_h_file; // down 2, left 1
-        moves |= (pos >> 15) & not_a_file; // down 2, right 1
-        moves |= (pos >> 10) & not_gh_file; // down 1, left 2
-        moves |= (pos >> 6) & not_ab_file; // down 1, right 2
+        moves |= (pos << 17) & not_a_file;
+        moves |= (pos << 15) & not_h_file;
+        moves |= (pos << 10) & not_ab_file;
+        moves |= (pos << 6) & not_gh_file;
+        moves |= (pos >> 17) & not_h_file;
+        moves |= (pos >> 15) & not_a_file;
+        moves |= (pos >> 10) & not_gh_file;
+        moves |= (pos >> 6) & not_ab_file;
         moves & !own_pieces
     }
 
@@ -458,28 +628,27 @@ impl GameState {
         let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
 
         let mut moves = 0u64;
-        moves |= pos << 8; // north
-        moves |= pos >> 8; // south
-        moves |= (pos << 1) & not_a_file; // east
-        moves |= (pos >> 1) & not_h_file; // west
-        moves |= (pos << 9) & not_a_file; // north-east
-        moves |= (pos << 7) & not_h_file; // north-west
-        moves |= (pos >> 7) & not_a_file; // south-east
-        moves |= (pos >> 9) & not_h_file; // south-west
+        moves |= pos << 8;
+        moves |= pos >> 8;
+        moves |= (pos << 1) & not_a_file;
+        moves |= (pos >> 1) & not_h_file;
+        moves |= (pos << 9) & not_a_file;
+        moves |= (pos << 7) & not_h_file;
+        moves |= (pos >> 7) & not_a_file;
+        moves |= (pos >> 9) & not_h_file;
 
-        let opponent_legal_mask = if self.white_to_move {
-            self.black_legal_mask
+        let opponent_attack_mask = if self.white_to_move {
+            self.black_attack_mask
         } else {
-            self.white_legal_mask
+            self.white_attack_mask
         };
 
-        (moves & !own_pieces) & !opponent_legal_mask
+        (moves & !own_pieces) & !opponent_attack_mask
     }
 
     pub fn get_rook_moves(pos: u64, occupied: u64, own_pieces: u64) -> u64 {
         let mut moves = 0u64;
 
-        // North ray
         let mut ray = pos;
         loop {
             ray <<= 8;
@@ -492,7 +661,6 @@ impl GameState {
             }
         }
 
-        // South ray
         let mut ray = pos;
         loop {
             ray >>= 8;
@@ -505,7 +673,6 @@ impl GameState {
             }
         }
 
-        // East ray
         let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
         let mut ray = pos;
         loop {
@@ -519,7 +686,6 @@ impl GameState {
             }
         }
 
-        // West ray
         let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
         let mut ray = pos;
         loop {
@@ -541,7 +707,6 @@ impl GameState {
         let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
         let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
 
-        // North-East ray
         let mut ray = pos;
         loop {
             ray = (ray << 9) & not_a_file;
@@ -554,7 +719,6 @@ impl GameState {
             }
         }
 
-        // North-West ray
         let mut ray = pos;
         loop {
             ray = (ray << 7) & not_h_file;
@@ -567,7 +731,6 @@ impl GameState {
             }
         }
 
-        // South-East ray
         let mut ray = pos;
         loop {
             ray = (ray >> 7) & not_a_file;
@@ -580,7 +743,6 @@ impl GameState {
             }
         }
 
-        // South-West ray
         let mut ray = pos;
         loop {
             ray = (ray >> 9) & not_h_file;
@@ -601,7 +763,6 @@ impl GameState {
             | Self::get_rook_moves(pos, occupied, own_pieces)
     }
 
-    /// `ep_target`: the square a capturing pawn would land on (0 if no EP available).
     pub fn get_pawn_moves(
         pos: u64,
         occupied: u64,
@@ -615,39 +776,25 @@ impl GameState {
 
         let not_a_file = 0xFEFEFEFEFEFEFEFEu64;
         let not_h_file = 0x7F7F7F7F7F7F7F7Fu64;
-        let rank_4 = 0x00000000FF000000u64; // white double-push landing rank
-        let rank_5 = 0x000000FF00000000u64; // black double-push landing rank
+        let rank_4 = 0x00000000FF000000u64;
+        let rank_5 = 0x000000FF00000000u64;
 
         if is_white {
-            // Single push
             let single_push = (pos << 8) & empty;
             moves |= single_push;
-
-            // Double push from rank 2
             moves |= (single_push << 8) & empty & rank_4;
-
-            // Normal diagonal captures
             moves |= (pos << 9) & not_a_file & enemy_pieces;
             moves |= (pos << 7) & not_h_file & enemy_pieces;
-
-            // En passant captures
             if ep_target != 0 {
                 moves |= (pos << 9) & not_a_file & ep_target;
                 moves |= (pos << 7) & not_h_file & ep_target;
             }
         } else {
-            // Single push
             let single_push = (pos >> 8) & empty;
             moves |= single_push;
-
-            // Double push from rank 7
             moves |= (single_push >> 8) & empty & rank_5;
-
-            // Normal diagonal captures
             moves |= (pos >> 7) & not_a_file & enemy_pieces;
             moves |= (pos >> 9) & not_h_file & enemy_pieces;
-
-            // En passant captures
             if ep_target != 0 {
                 moves |= (pos >> 7) & not_a_file & ep_target;
                 moves |= (pos >> 9) & not_h_file & ep_target;
