@@ -809,7 +809,7 @@ impl GameState {
             let pos = pieces & pieces.wrapping_neg(); // Isolate LSB
             let i = pos.trailing_zeros() as usize;
 
-            self.white_attack_mask |= self.get_raw_attacks(pos, true);
+            self.white_attack_mask |= self.get_raw_attacks(pos, true, self.occupied);
             self.white_legal_moves[i] = self.get_piece_moves(pos, self.white_pieces);
             self.white_legal_mask |= self.white_legal_moves[i];
 
@@ -827,7 +827,7 @@ impl GameState {
             let pos = pieces & pieces.wrapping_neg();
             let i = pos.trailing_zeros() as usize;
 
-            self.black_attack_mask |= self.get_raw_attacks(pos, false);
+            self.black_attack_mask |= self.get_raw_attacks(pos, false, self.occupied);
             self.black_legal_moves[i] = self.get_piece_moves(pos, self.black_pieces);
             self.black_legal_mask |= self.black_legal_moves[i];
 
@@ -835,7 +835,7 @@ impl GameState {
         }
     }
 
-    pub fn get_raw_attacks(&self, pos: u64, is_white: bool) -> u64 {
+    pub fn get_raw_attacks(&self, pos: u64, is_white: bool, occupied: u64) -> u64 {
         let idx = pos.trailing_zeros() as usize;
 
         if is_white {
@@ -844,11 +844,11 @@ impl GameState {
             } else if pos & self.white_knights != 0 {
                 return KNIGHT_ATTACKS[idx];
             } else if pos & self.white_bishops != 0 {
-                return Self::get_bishop_moves(pos, self.occupied, 0);
+                return Self::get_bishop_moves(pos, occupied, 0);
             } else if pos & self.white_rooks != 0 {
-                return Self::get_rook_moves(pos, self.occupied, 0);
+                return Self::get_rook_moves(pos, occupied, 0);
             } else if pos & self.white_queens != 0 {
-                return Self::get_queen_moves(pos, self.occupied, 0);
+                return Self::get_queen_moves(pos, occupied, 0);
             } else if pos & self.white_king != 0 {
                 return KING_ATTACKS[idx];
             }
@@ -858,18 +858,17 @@ impl GameState {
             } else if pos & self.black_knights != 0 {
                 return KNIGHT_ATTACKS[idx];
             } else if pos & self.black_bishops != 0 {
-                return Self::get_bishop_moves(pos, self.occupied, 0);
+                return Self::get_bishop_moves(pos, occupied, 0);
             } else if pos & self.black_rooks != 0 {
-                return Self::get_rook_moves(pos, self.occupied, 0);
+                return Self::get_rook_moves(pos, occupied, 0);
             } else if pos & self.black_queens != 0 {
-                return Self::get_queen_moves(pos, self.occupied, 0);
+                return Self::get_queen_moves(pos, occupied, 0);
             } else if pos & self.black_king != 0 {
                 return KING_ATTACKS[idx];
             }
         }
         0
     }
-
     pub fn get_piece_moves(&self, pos: u64, own_pieces: u64) -> u64 {
         let mut pin_mask = !0u64;
         for &line in &self.king_pin_lines {
@@ -901,12 +900,25 @@ impl GameState {
         } else if (pos & (self.white_queens | self.black_queens)) != 0 {
             Self::get_queen_moves(pos, self.occupied, own_pieces)
         } else if is_king {
-            let opp_attack = if self.white_to_move {
-                self.black_attack_mask
+            // Remove king from occupied so sliders can't hide behind it
+            let occupied_without_king = self.occupied & !pos;
+
+            let mut opp_attack_ex_king = 0u64;
+            let opp_pieces = if self.white_to_move {
+                self.black_pieces
             } else {
-                self.white_attack_mask
+                self.white_pieces
             };
-            ((KING_ATTACKS[idx] & !own_pieces) & !opp_attack) | self.get_castling_moves()
+
+            let mut temp = opp_pieces;
+            while temp != 0 {
+                let p = temp & temp.wrapping_neg();
+                opp_attack_ex_king |=
+                    self.get_raw_attacks(p, !self.white_to_move, occupied_without_king);
+                temp &= temp - 1;
+            }
+
+            ((KING_ATTACKS[idx] & !own_pieces) & !opp_attack_ex_king) | self.get_castling_moves()
         } else {
             0
         };
