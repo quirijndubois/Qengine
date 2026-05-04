@@ -308,6 +308,40 @@ impl GameState {
         moves
     }
 
+    pub fn get_capture_move_list(&self) -> Vec<(u64, u64)> {
+        let mut moves = Vec::new();
+
+        if self.white_to_move {
+            for i in 0..64 {
+                let from_mask = 1u64 << i;
+                if self.white_pieces & from_mask != 0 {
+                    let to_mask = self.white_legal_moves[i] & self.black_pieces;
+                    let mut temp = to_mask;
+                    while temp != 0 {
+                        let to_bit = temp & temp.wrapping_neg();
+                        moves.push((from_mask, to_bit));
+                        temp &= temp - 1;
+                    }
+                }
+            }
+        } else {
+            for i in 0..64 {
+                let from_mask = 1u64 << i;
+                if self.black_pieces & from_mask != 0 {
+                    let to_mask = self.black_legal_moves[i] & self.white_pieces;
+                    let mut temp = to_mask;
+                    while temp != 0 {
+                        let to_bit = temp & temp.wrapping_neg();
+                        moves.push((from_mask, to_bit));
+                        temp &= temp - 1;
+                    }
+                }
+            }
+        }
+
+        moves
+    }
+
     pub fn update_derived(&mut self) {
         self.white_pieces = self.white_pawns
             | self.white_knights

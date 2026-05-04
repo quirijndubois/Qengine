@@ -1,5 +1,6 @@
 use crate::game::GameState;
 use crate::piece::Piece;
+use crate::search::get_best_move;
 use eframe::egui;
 
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
@@ -68,6 +69,13 @@ impl ChessApp {
 impl eframe::App for ChessApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
+            if !self.game_state.white_to_move {
+                let best_move = get_best_move(&mut self.game_state.clone(), 3);
+                if let Some((from, to)) = best_move {
+                    self.game_state.make_move(from, to);
+                }
+            }
+
             // Fetch legal moves as a COPY to avoid borrow checker errors
             let legal_moves = if self.game_state.white_to_move {
                 self.game_state.white_legal_moves

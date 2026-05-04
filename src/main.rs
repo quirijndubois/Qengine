@@ -1,6 +1,7 @@
 mod app;
 mod game;
 mod piece;
+mod search;
 
 use app::ChessApp;
 use eframe::egui;
