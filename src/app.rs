@@ -69,13 +69,6 @@ impl ChessApp {
 impl eframe::App for ChessApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
-            if !self.game_state.white_to_move {
-                let best_move = get_best_move(&mut self.game_state.clone(), 3);
-                if let Some((from, to)) = best_move {
-                    self.game_state.make_move(from, to);
-                }
-            }
-
             // Fetch legal moves as a COPY to avoid borrow checker errors
             let legal_moves = if self.game_state.white_to_move {
                 self.game_state.white_legal_moves
@@ -245,6 +238,14 @@ impl eframe::App for ChessApp {
                                 } else if legal_moves[sel as usize] & target_mask != 0 {
                                     let is_take = (self.game_state.occupied & target_mask) != 0;
                                     self.game_state.make_move(1u64 << sel, target_mask);
+
+                                    if !self.game_state.white_to_move {
+                                        let best_move =
+                                            get_best_move(&mut self.game_state.clone(), 5);
+                                        if let Some((from, to)) = best_move {
+                                            self.game_state.make_move(from, to);
+                                        }
+                                    }
 
                                     if is_take {
                                         self.play_sound(CAPTURE_SOUND);
