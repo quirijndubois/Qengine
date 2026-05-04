@@ -120,6 +120,9 @@ pub struct GameState {
 
     pub white_is_checked: bool,
     pub black_is_checked: bool,
+
+    pub check_mate: bool,
+
     pub history: Vec<MoveRecord>,
 }
 
@@ -238,6 +241,7 @@ impl GameState {
             en_passant_target: 0,
             white_is_checked: false,
             black_is_checked: false,
+            check_mate: false,
             history: Vec::new(),
         }
     }
@@ -269,7 +273,21 @@ impl GameState {
         let mobility_score =
             self.white_attack_mask.count_ones() as i32 - self.black_attack_mask.count_ones() as i32;
 
-        material_score * 100 + mobility_score
+        let check_score = if self.white_is_checked {
+            -50
+        } else if self.black_is_checked {
+            50
+        } else {
+            0
+        };
+
+        let check_mate_score = if self.check_mate {
+            if self.white_to_move { -10000 } else { 10000 }
+        } else {
+            0
+        };
+
+        material_score * 100 + mobility_score * 10 + check_score + check_mate_score
     }
 
     pub fn get_legal_move_list(&self) -> Vec<(u64, u64)> {
@@ -361,6 +379,17 @@ impl GameState {
             self.get_king_pin_lines(self.white_king)
         } else {
             self.get_king_pin_lines(self.black_king)
+        };
+
+        self.white_is_checked = if self.white_to_move {
+            self.black_attack_mask & self.white_king != 0
+        } else {
+            self.white_attack_mask & self.black_king != 0
+        };
+        self.black_is_checked = if self.white_to_move {
+            self.white_attack_mask & self.black_king != 0
+        } else {
+            self.black_attack_mask & self.white_king != 0
         };
     }
 
@@ -547,6 +576,20 @@ impl GameState {
         }
 
         // ----------------------------
+        // promote pawn to queen
+        // ----------------------------
+
+        if moved_piece == PieceType::Pawn {
+            if self.white_to_move && to & 0xFF00000000000000 != 0 {
+                self.white_pawns &= !to;
+                self.white_queens |= to;
+            } else if !self.white_to_move && to & 0x00000000000000FF != 0 {
+                self.black_pawns &= !to;
+                self.black_queens |= to;
+            }
+        }
+
+        // ----------------------------
         // SWITCH TURN
         // ----------------------------
         self.white_to_move = !self.white_to_move;
@@ -702,6 +745,12 @@ impl GameState {
             self.update_white_legal_moves(); // Generates white attack masks
             self.compute_check_mask();
             self.update_black_legal_moves();
+        }
+
+        if self.white_to_move {
+            self.check_mate = self.white_is_checked && (self.white_legal_mask == 0);
+        } else {
+            self.check_mate = self.black_is_checked && (self.black_legal_mask == 0);
         }
     }
 
