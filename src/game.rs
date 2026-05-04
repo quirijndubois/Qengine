@@ -1,4 +1,3 @@
-use crate::game;
 
 const NOT_A_FILE: u64 = 0xFEFEFEFEFEFEFEFE;
 const NOT_H_FILE: u64 = 0x7F7F7F7F7F7F7F7F;
@@ -262,6 +261,18 @@ impl GameState {
         }
     }
 
+    pub fn get_piece_type_at(&self, sq: u64) -> Option<PieceType> {
+        if sq & self.occupied == 0 {
+            None
+        } else {
+            Some(self.detect_piece(sq))
+        }
+    }
+
+    pub fn is_capture(&self, to: u64) -> bool {
+        to & self.occupied != 0
+    }
+
     pub fn evaluate(&self) -> i32 {
         let material_score = self.white_pawns.count_ones() as i32
             - self.black_pawns.count_ones() as i32
@@ -327,35 +338,18 @@ impl GameState {
     }
 
     pub fn get_capture_move_list(&self) -> Vec<(u64, u64)> {
-        let mut moves = Vec::new();
+        let standard_moves = self.get_legal_move_list();
 
-        if self.white_to_move {
-            for i in 0..64 {
-                let from_mask = 1u64 << i;
-                if self.white_pieces & from_mask != 0 {
-                    let to_mask = self.white_legal_moves[i] & self.black_pieces;
-                    let mut temp = to_mask;
-                    while temp != 0 {
-                        let to_bit = temp & temp.wrapping_neg();
-                        moves.push((from_mask, to_bit));
-                        temp &= temp - 1;
-                    }
-                }
-            }
+        let opponent_pieces = if self.white_to_move {
+            self.black_pieces
         } else {
-            for i in 0..64 {
-                let from_mask = 1u64 << i;
-                if self.black_pieces & from_mask != 0 {
-                    let to_mask = self.black_legal_moves[i] & self.white_pieces;
-                    let mut temp = to_mask;
-                    while temp != 0 {
-                        let to_bit = temp & temp.wrapping_neg();
-                        moves.push((from_mask, to_bit));
-                        temp &= temp - 1;
-                    }
-                }
-            }
-        }
+            self.white_pieces
+        };
+
+        let moves = standard_moves
+            .into_iter()
+            .filter(|&(_from, to)| to & opponent_pieces != 0)
+            .collect();
 
         moves
     }
@@ -379,17 +373,6 @@ impl GameState {
             self.get_king_pin_lines(self.white_king)
         } else {
             self.get_king_pin_lines(self.black_king)
-        };
-
-        self.white_is_checked = if self.white_to_move {
-            self.black_attack_mask & self.white_king != 0
-        } else {
-            self.white_attack_mask & self.black_king != 0
-        };
-        self.black_is_checked = if self.white_to_move {
-            self.white_attack_mask & self.black_king != 0
-        } else {
-            self.black_attack_mask & self.white_king != 0
         };
     }
 
@@ -636,49 +619,79 @@ impl GameState {
         let from = last.from;
         let to = last.to;
 
-        let move_mask = from | to;
+        // Clear both squares first to handle captures and promotions cleanly
+        let clear_mask = !(from | to);
+        self.white_pawns &= clear_mask;
+        self.white_knights &= clear_mask;
+        self.white_bishops &= clear_mask;
+        self.white_rooks &= clear_mask;
+        self.white_queens &= clear_mask;
+        self.white_king &= clear_mask;
 
+        self.black_pawns &= clear_mask;
+        self.black_knights &= clear_mask;
+        self.black_bishops &= clear_mask;
+        self.black_rooks &= clear_mask;
+        self.black_queens &= clear_mask;
+        self.black_king &= clear_mask;
+
+        // Restore moved piece to 'from'
         match last.moved_piece {
             PieceType::Pawn => {
                 if self.white_to_move {
-                    self.white_pawns ^= move_mask;
+                    self.white_pawns |= from;
                 } else {
-                    self.black_pawns ^= move_mask;
+                    self.black_pawns |= from;
                 }
             }
             PieceType::Knight => {
                 if self.white_to_move {
-                    self.white_knights ^= move_mask;
+                    self.white_knights |= from;
                 } else {
-                    self.black_knights ^= move_mask;
+                    self.black_knights |= from;
                 }
             }
             PieceType::Bishop => {
                 if self.white_to_move {
-                    self.white_bishops ^= move_mask;
+                    self.white_bishops |= from;
                 } else {
-                    self.black_bishops ^= move_mask;
+                    self.black_bishops |= from;
                 }
             }
             PieceType::Rook => {
                 if self.white_to_move {
-                    self.white_rooks ^= move_mask;
+                    self.white_rooks |= from;
                 } else {
-                    self.black_rooks ^= move_mask;
+                    self.black_rooks |= from;
                 }
             }
             PieceType::Queen => {
                 if self.white_to_move {
-                    self.white_queens ^= move_mask;
+                    self.white_queens |= from;
                 } else {
-                    self.black_queens ^= move_mask;
+                    self.black_queens |= from;
                 }
             }
             PieceType::King => {
                 if self.white_to_move {
-                    self.white_king ^= move_mask;
+                    self.white_king |= from;
                 } else {
-                    self.black_king ^= move_mask;
+                    self.black_king |= from;
+                }
+
+                // Handle castling undo (rook move)
+                if to == from << 2 {
+                    if self.white_to_move {
+                        self.white_rooks ^= 0x00000000000000A0; // f1 -> h1
+                    } else {
+                        self.black_rooks ^= 0xA000000000000000; // f8 -> h8
+                    }
+                } else if to == from >> 2 {
+                    if self.white_to_move {
+                        self.white_rooks ^= 0x0000000000000009; // d1 -> a1
+                    } else {
+                        self.black_rooks ^= 0x0900000000000000; // d8 -> a8
+                    }
                 }
             }
         }
@@ -740,12 +753,16 @@ impl GameState {
         if self.white_to_move {
             self.update_black_legal_moves(); // Generates black attack masks
             self.compute_check_mask();
-            self.update_white_legal_moves();
+            self.update_white_legal_moves(); // Generates white attack masks
         } else {
             self.update_white_legal_moves(); // Generates white attack masks
             self.compute_check_mask();
-            self.update_black_legal_moves();
+            self.update_black_legal_moves(); // Generates black attack masks
         }
+
+        // Update check flags based on fresh attack masks
+        self.white_is_checked = self.black_attack_mask & self.white_king != 0;
+        self.black_is_checked = self.white_attack_mask & self.black_king != 0;
 
         if self.white_to_move {
             self.check_mate = self.white_is_checked && (self.white_legal_mask == 0);

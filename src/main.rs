@@ -2,6 +2,8 @@ mod app;
 mod game;
 mod piece;
 mod search;
+#[cfg(test)]
+mod tests;
 
 use app::ChessApp;
 use eframe::egui;
